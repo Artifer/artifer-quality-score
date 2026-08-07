@@ -4,11 +4,8 @@ A deterministic, explainable code quality score for Python, TypeScript and
 JavaScript. One number per file from 1.0 to 10.0, with every deducted point
 traceable to a named code smell at a specific line.
 
-**Two implementations, one behaviour.** `rust/` is the primary implementation —
-a single static binary, no runtime to install. `src/aqs/` is the original Python
-version, kept as a differential-testing oracle. They are verified to produce
-byte-identical JSON across 1,191 files and 3,841 findings; see
-[Implementations](#implementations).
+A single static binary — no runtime to install in the repository being scored,
+which matters for Node-only frontend pipelines.
 
 Built for two jobs:
 
@@ -35,13 +32,8 @@ Built for two jobs:
 ## Install
 
 ```bash
-cd rust && cargo build --release      # binary at rust/target/release/aqs
-```
-
-The Python reference implementation, if you want it for differential testing:
-
-```bash
-uv venv && uv pip install -e .
+cargo build --release          # binary at target/release/aqs
+cargo install --path .         # or put it on your PATH
 ```
 
 ## Usage
@@ -233,48 +225,33 @@ Run `aqs explain --thresholds` for the full list of threshold names.
 Measured on a 258,955 LoC mixed Python/TS corpus, 12-core M-series, all cores,
 end-to-end through the CLI including JSON output.
 
-**Bulk throughput — 3.4x:**
-
 | | Time | Throughput | 100k LoC |
 | --- | --- | --- | --- |
-| Python | 2.22s | 116,747 LoC/s | 0.86s |
-| **Rust** | **0.66s** | **392,102 LoC/s** | **0.26s** |
+| `scan`, 258,955 LoC | 0.66s | 392,102 LoC/s | 0.26s |
+| `check`, single file | 14ms | — | — |
+| `explain` (startup only) | 2ms | — | — |
 
-**Small-scale latency — 12-14x.** This is the path an agent loop actually hits, and
-the gap is widest here because Python's interpreter startup dominates it entirely
-(best of 8):
+The 2ms floor is the point of shipping a binary: a loop that scores a file after each
+edit pays no interpreter or import cost at all. For reference, the Python
+implementation this replaced measured 3.4x slower in bulk (116,747 LoC/s) and 12-14x
+slower on small inputs, where its ~122ms of interpreter startup dominated everything
+else.
 
-| Case | Python | Rust | Speedup |
-| --- | --- | --- | --- |
-| single file (`check`) | 162ms | 14ms | 11.8x |
-| 16-file directory (`scan`) | 239ms | 17ms | 14.2x |
-| startup only (`explain`) | 122ms | 2ms | 74.4x |
-
-Python's ~122ms of interpreter and import cost is unavoidable and paid on every
-invocation; Rust pays 2ms. For a loop that scores a file after each edit, that fixed
-cost *is* the runtime.
-
-> An earlier version of this table claimed 7.0x on bulk throughput. That was wrong:
-> about half the Python side was `rich.print_json` syntax-highlighting 2.6 MB of
-> piped output, not analysis. The Python CLI now writes JSON to plain stdout and the
-> honest figure is 3.4x. Decompose a benchmark before believing it.
-
-Full two-sided merge gate, Python, on the same corpus — it scores every file in two
-trees, so this is the expensive case:
+Full two-sided merge gate on the same corpus — it scores every file in two trees, so
+this is the expensive case:
 
 | | Time | 100k LoC equivalent |
 | --- | --- | --- |
-| `--no-cache` | 4.30s | 1.69s |
-| cold cache | 2.42s | 0.95s |
-| **warm cache** | **0.57s** | **0.22s** |
+| `--no-cache` | 1.72s | 0.66s |
+| cold cache | 1.29s | 0.50s |
+| **warm cache** | **0.45s** | **0.17s** |
 
-All produce an identical score. Caching and the Rust port are independent levers
-that compose: caching removes work, Rust does the remaining work faster.
+All produce an identical score. Caching and raw speed are independent levers that
+compose: caching removes work, and what remains runs faster. A cold run already beats
+an uncached one because both sides of a `HEAD`-vs-`HEAD` gate share blobs.
 
-Both implementations parallelise (rayon in Rust, a process pool in Python) and
-collect results in input order, so the report is byte-identical however many
-workers ran. The Python pool falls back to serial rather than failing if it cannot
-spawn — parallelism is an optimisation, never a correctness requirement.
+Analysis is parallel across cores via rayon, with results collected in input order,
+so the report is byte-identical however many threads ran.
 
 `aqs delta` only scores changed files, so the TDD-loop path is typically 40-150ms
 regardless of repo size. Baseline blobs are read through a single
@@ -309,7 +286,7 @@ A scan is a pure function of (file bytes, profile, tool version). No git history
 no network, no clock, no filesystem-order dependence. Same input, byte-identical
 JSON out.
 
-The `tree-sitter-*` grammar pins in `pyproject.toml` are **exact, not ranges**.
+The `tree-sitter-*` grammar pins in `Cargo.toml` are **exact, not ranges**.
 A grammar bump can rename AST nodes and silently change every score in the repo,
 so treat changing a pin — or the tool version — as a scoring change that needs
 re-baselining.
@@ -375,49 +352,44 @@ there is no public number to copy and no claim of equivalence here.
 Its scores are not comparable to CodeScene's and should never be presented as
 such.
 
-## Implementations
+## Provenance
 
-`rust/` is primary. `src/aqs/` is the Python original, retained deliberately as a
-**differential-testing oracle**: when a port has a known-good reference, every
-disagreement is a bug with an answer already attached, which is what turns a rewrite
-from a gamble into routine work.
+This started as a Python implementation, which was then ported to Rust and verified
+byte-identical across 1,191 files and 3,841 findings — every score, penalty,
+`details` string and threshold. The Python version was removed once parity held; it
+lives in git history if you ever want the oracle back:
 
 ```bash
-python scripts/differential.py src ../backend ../frontend
-#   IDENTICAL — 1191 files, 3841 findings, score 5.7138
+git log --diff-filter=D --name-only -- 'src/aqs/*'   # find the removal commit
+git show <commit>^:src/aqs/detectors.py              # read any file as it was
 ```
 
-Verified identical across 1,191 files / 3,841 findings, including every score,
-penalty, `details` string and threshold. Parity is not automatic — three things had
-to be ported exactly rather than reasonably:
+Three details had to be ported *exactly* rather than reasonably. They are worth
+knowing before touching the corresponding code, because each silently changes scores:
 
-- **`difflib.SequenceMatcher`**, including its autojunk heuristic. For sequences of
-  200+ elements it drops any element occurring in more than 1% of the input, which
-  changes real similarity ratios. Any "sensible" substitute (Levenshtein, Jaccard,
-  a different LCS) gives different numbers and moves the duplication threshold.
-- **`fnmatch` semantics**, where `*` matches `/`. A path-aware glob crate would
-  silently break every exclude pattern in the profile.
-- **Detector emission order**, because per-rule cap allocation breaks ties by
-  discovery order, so a different traversal changes which findings get trimmed.
+- **`difflib.SequenceMatcher`** (`src/difflib.rs`) is a deliberate port of CPython's
+  algorithm, autojunk heuristic included: above 200 elements it drops any element
+  occurring in more than 1% of the input. Any "sensible" substitute — Levenshtein,
+  Jaccard, a different LCS — gives different ratios and moves the duplication
+  threshold. The unit tests pin exact CPython values.
+- **`fnmatch` semantics** (`src/glob.rs`), where `*` matches `/`. Swapping in a
+  path-aware glob crate would silently break every exclude pattern in the profile.
+- **Detector emission order** (`src/detectors.rs`), because per-rule cap allocation
+  breaks ties by discovery order, so a different traversal changes which findings get
+  trimmed when a cap binds.
 
-Two bugs surfaced during the port and were fixed in both: an unanchored regex in the
-Rust glob translation, and a Python `lstrip("await ")` that stripped a *character
-set* rather than a prefix, mangling `assertEqual(...)` into `ssertEqual(...)`.
-
-Keeping both costs little — the Python version is frozen — and buys a permanent
-conformance check for any future rule change.
+Two real bugs surfaced only because there was a reference to disagree with: an
+unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), and a
+`lstrip("await ")` that stripped a *character set* rather than a prefix, mangling
+`assertEqual(...)` into `ssertEqual(...)`.
 
 ## Development
 
 ```bash
-cd rust && cargo test           # 69 tests
-.venv/bin/python -m pytest      # 140 tests
-python scripts/differential.py src tests
+cargo test          # 69 tests
 ```
 
-The architecture keeps detection and scoring strictly separate. Both
-implementations use the same module layout, so a change lands in the same place
-twice:
+The architecture keeps detection and scoring strictly separate:
 
 | Module | Responsibility |
 | --- | --- |
@@ -432,7 +404,8 @@ twice:
 | `delta` | changed-file comparison |
 | `gate` | whole-repository no-regression gate |
 | `explain` | remediation guidance per rule |
-| `difflib` | (Rust only) the ported similarity algorithm |
+| `difflib` | CPython-compatible similarity, for Code Duplication |
+| `glob` | `fnmatch`-compatible pattern matching, for the path patterns |
 
 Adding a rule means writing one detector function with a `@function_detector` or
 `@file_detector` decorator, one `RuleConfig` entry, and one `RuleDoc`. Because no
