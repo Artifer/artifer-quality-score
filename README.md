@@ -514,8 +514,25 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ## Development
 
 ```bash
-cargo test          # 69 tests
+cargo test                    # 131 tests
+cargo test --test cli         # 29 of them drive the real binary
 ```
+
+Three suites, and the split is deliberate:
+
+| suite | covers |
+| --- | --- |
+| unit tests in `src/` | measurement primitives, glob and difflib parity, config validation |
+| `tests/behaviour.rs` | one test per rule — that it fires, and that it stays quiet on correct code |
+| `tests/cli.rs` | the binary itself: exit codes, JSON shape, git-backed `delta` and `gate` |
+
+The CLI suite exists because the CLI *is* the contract — exit codes gate automation and
+the JSON shape is what a model consumes. It was previously verified only by hand, and two
+regressions slipped through that way: an error printed whenever `--min-score` was passed
+rather than only on failure, and `.aqs.json` silently ignored for a bare-filename target.
+Both are now pinned. No test mutates the process working directory; where one needs to run
+"inside" a directory it sets the *child's* cwd, so the suite is safe under `cargo test`'s
+default parallelism.
 
 The architecture keeps detection and scoring strictly separate:
 
