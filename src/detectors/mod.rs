@@ -17,9 +17,10 @@
 //! the rules in the order below and nowhere else.
 
 use crate::difflib;
+use crate::directives::Directive;
 use crate::languages::LanguageSpec;
 use crate::metrics;
-use crate::models::Range;
+use crate::models::{Range, Suppression};
 use crate::profile::{self as prof, Profile};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
@@ -43,11 +44,51 @@ use module_level::{
 };
 use test_level::{duplicated_assertion_blocks, large_assertion_blocks};
 
-/// Every applicable finding for a file, in a stable order.
+/// Which function a finding belongs to, by index into `ctx.functions`.
+///
+/// Matched by name *and* containing line span: a name alone is ambiguous when a file has
+/// two functions called `new`, and a span alone is ambiguous for expression-level smells
+/// such as Complex Conditional, which anchor inside the body rather than on the
+/// signature.
+fn owning_function(finding: &RawFinding, ctx: &FileContext) -> Option<usize> {
+    let name = finding.function.as_deref()?;
+    let line = finding.range.start_line;
+    ctx.functions.iter().enumerate().find_map(|(index, f)| {
+        let contains = f.range.start_line <= line && line <= f.range.end_line;
+        (f.name == name && contains).then_some(index)
+    })
+}
+
+/// Split findings into those that count and those an `@aqs(...)` comment turned off.
+fn partition_suppressed(
+    findings: Vec<RawFinding>,
+    ctx: &FileContext,
+) -> (Vec<RawFinding>, Vec<Suppression>) {
+    let mut kept = Vec::new();
+    let mut suppressed = Vec::new();
+
+    for finding in findings {
+        let owner = owning_function(&finding, ctx);
+        match ctx.suppression(owner, finding.category) {
+            Some(directive) => suppressed.push(Suppression {
+                category: finding.category.to_string(),
+                details: finding.details,
+                highlight_range: finding.range,
+                function: finding.function,
+                reason: directive.reason.clone(),
+                directive_line: directive.line,
+            }),
+            None => kept.push(finding),
+        }
+    }
+    (kept, suppressed)
+}
+
+/// Every applicable finding for a file, in a stable order, plus the ones suppressed.
 ///
 /// File-level detectors run first, then each function through the function-level
 /// detectors, in exactly this order.
-pub fn detect(ctx: &FileContext) -> Vec<RawFinding> {
+pub fn detect(ctx: &FileContext) -> (Vec<RawFinding>, Vec<Suppression>) {
     let mut findings = Vec::new();
 
     code_duplication(ctx, &mut findings);
@@ -79,5 +120,6 @@ pub fn detect(ctx: &FileContext) -> Vec<RawFinding> {
         // A rule set to weight 0 should vanish from the report, not sit at -0.00.
         ctx.profile.rule(finding.category).weight > 0.0
     });
-    findings
+
+    partition_suppressed(findings, ctx)
 }

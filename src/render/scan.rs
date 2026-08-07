@@ -29,6 +29,23 @@ pub(crate) fn render_scan_summary(report: &ScanReport, style: &Style) {
     if skipped > 0 {
         println!("{}", style.paint(&format!("  {skipped} file(s) skipped"), DIM));
     }
+
+    // Suppression is a decision, so it is never silent.
+    let suppressed: usize = report.files.iter().map(|f| f.suppressed.len()).sum();
+    if suppressed > 0 {
+        println!(
+            "{}",
+            style.paint(
+                &format!("  {suppressed} finding(s) suppressed by @aqs directives"),
+                DIM
+            )
+        );
+    }
+    for file in &report.files {
+        if let Some(error) = &file.directive_error {
+            println!("{}", style.paint(&format!("  directive error: {error}"), RED));
+        }
+    }
 }
 
 /// Files with findings, worst first.

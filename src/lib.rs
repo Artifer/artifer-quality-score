@@ -15,6 +15,7 @@ pub mod analyze;
 pub mod cache;
 pub mod cli;
 pub mod detectors;
+pub mod directives;
 pub mod difflib;
 pub mod delta;
 pub mod gate;

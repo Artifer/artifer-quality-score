@@ -50,6 +50,22 @@ pub struct Finding {
     pub function: Option<String>,
 }
 
+/// A finding an author deliberately turned off with a source comment.
+///
+/// Recorded rather than dropped: a suppression is a decision, and a reviewer should be
+/// able to see what a branch chose to ignore and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Suppression {
+    pub category: String,
+    pub details: String,
+    pub highlight_range: Range,
+    pub function: Option<String>,
+    /// The justification from the directive, which is mandatory.
+    pub reason: String,
+    /// 1-indexed line the directive itself appears on.
+    pub directive_line: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FunctionReport {
     pub function: String,
@@ -72,6 +88,17 @@ pub struct FileReport {
     /// Count of syntax errors tree-sitter recovered from. The file is still scored,
     /// but a non-zero count means treat the number with suspicion.
     pub syntax_errors: usize,
+    /// Findings turned off by an `@aqs(...)` comment. Excluded from the score, but
+    /// listed so that suppression is visible rather than silent.
+    #[serde(default)]
+    pub suppressed: Vec<Suppression>,
+    /// A malformed `@aqs(...)` directive in this file.
+    ///
+    /// The file is still scored, deliberately as though the directive were absent, so a
+    /// broken suppression can never *lower* a score. The CLI exits non-zero and prints
+    /// this, because a directive that does not work is worse than no directive.
+    #[serde(default)]
+    pub directive_error: Option<String>,
 }
 
 impl FileReport {
@@ -85,6 +112,8 @@ impl FileReport {
             function_level_code_smells: Vec::new(),
             error: Some(error),
             syntax_errors: 0,
+            suppressed: Vec::new(),
+            directive_error: None,
         }
     }
 
@@ -229,6 +258,8 @@ mod tests {
             function_level_code_smells: vec![],
             error: None,
             syntax_errors: 0,
+            suppressed: vec![],
+            directive_error: None,
         }
     }
 

@@ -74,6 +74,12 @@ pub fn run_scan(args: ScanArgs) -> Result<ExitCode, ExitCode> {
         render::render_scan(&report, &style(), args.limit, args.all);
     }
 
+    if report.files.iter().any(|f| f.directive_error.is_some()) {
+        // A directive that does not work is worse than no directive, so this fails even
+        // when the score itself is fine.
+        return Ok(ExitCode::from(EXIT_ERROR));
+    }
+
     let Some(minimum) = args.min_score else {
         return Ok(ExitCode::from(EXIT_OK));
     };
@@ -144,6 +150,15 @@ pub fn run_check(args: CheckArgs) -> Result<ExitCode, ExitCode> {
     let mut cache = open_cache(None, &loaded, false);
     let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
     render::render_check(&report);
+
+    for file in &report.files {
+        if let Some(error) = &file.directive_error {
+            eprintln!("directive error: {error}");
+        }
+    }
+    if report.files.iter().any(|f| f.directive_error.is_some()) {
+        return Ok(ExitCode::from(EXIT_ERROR));
+    }
 
     let failed = args.fail_on_findings && report.findings_count() > 0;
     Ok(ExitCode::from(if failed { EXIT_GATE_FAILED } else { EXIT_OK }))

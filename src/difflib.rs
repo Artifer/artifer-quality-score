@@ -102,6 +102,8 @@ impl<'a> SequenceMatcher<'a> {
     }
 
     /// Grow a match outwards while the elements on either side are equal.
+    // @aqs(disable:"Complex Conditional") the bounds check and the equality read better
+    // together than behind a predicate name
     fn extend(&self, found: Match, window: Window) -> Match {
         let Match { mut a_start, mut b_start, mut size } = found;
         // Inline rather than behind `matches_before`/`matches_after` helpers: for a

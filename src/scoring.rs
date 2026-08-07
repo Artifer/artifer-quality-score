@@ -148,5 +148,7 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
         function_level_code_smells: function_reports,
         error: None,
         syntax_errors: 0,
+        suppressed: Vec::new(),
+        directive_error: None,
     }
 }

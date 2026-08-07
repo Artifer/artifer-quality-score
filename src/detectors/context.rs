@@ -28,6 +28,13 @@ pub struct FunctionContext<'tree> {
 }
 
 pub struct FileContext<'tree, 'src> {
+    /// A malformed directive in this file, if any. The file is still scored as though the
+    /// directive were absent, so a broken suppression can never lower a score.
+    pub directive_error: Option<String>,
+    /// Directives applying to the whole file.
+    pub file_directives: Vec<Directive>,
+    /// Directives resolved to the function they precede, by index into `functions`.
+    pub function_directives: HashMap<usize, Vec<Directive>>,
     pub path: String,
     pub spec: &'static LanguageSpec,
     pub profile: &'src Profile,
@@ -62,7 +69,18 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
                 name,
             });
         }
+        // Parsed here rather than passed in: the context already has the path, tree and
+        // source, so taking them as a sixth argument only widened the signature.
+        let (directives, directive_error) = match parse_directives(&root, source, &path) {
+            Ok(directives) => (directives, None),
+            Err(error) => (Vec::new(), Some(error.to_string())),
+        };
+        let (file_directives, function_directives) =
+            resolve_directives(directives, &functions);
         Self {
+            file_directives,
+            function_directives,
+            directive_error,
             is_test: profile.test_patterns.matches(&path),
             loc: metrics::logical_lines(&root),
             path,
@@ -108,3 +126,65 @@ pub(crate) fn percent(ratio: f64) -> String {
 // Function level
 // --------------------------------------------------------------------------- //
 
+
+/// Attach each directive to what it governs.
+///
+/// A function-scoped directive applies to the next function that starts after it, which
+/// is what makes `@aqs(...)` read as an annotation on the declaration below.
+fn resolve_directives(
+    directives: Vec<Directive>,
+    functions: &[FunctionContext],
+) -> (Vec<Directive>, HashMap<usize, Vec<Directive>>) {
+    let mut file_level = Vec::new();
+    let mut per_function: HashMap<usize, Vec<Directive>> = HashMap::new();
+
+    for directive in directives {
+        if directive.file_scoped {
+            file_level.push(directive);
+            continue;
+        }
+        let target = functions
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| f.range.start_line > directive.line)
+            .min_by_key(|(_, f)| f.range.start_line);
+        if let Some((index, _)) = target {
+            per_function.entry(index).or_default().push(directive);
+        }
+        // A directive with no function after it governs nothing; `detect` reports it as
+        // unused rather than failing, since a stale one is a cleanup task, not an error.
+    }
+    (file_level, per_function)
+}
+
+impl FileContext<'_, '_> {
+    /// The directive suppressing `category`, if any.
+    ///
+    /// A function-scoped directive wins over a file-scoped one, which is the order a
+    /// reader expects: the annotation nearest the code governs it.
+    pub fn suppression(&self, function: Option<usize>, category: &str) -> Option<&Directive> {
+        let on_function = function
+            .and_then(|index| self.function_directives.get(&index))
+            .and_then(|directives| directives.iter().find(|d| d.covers(category)));
+        on_function.or_else(|| self.file_directives.iter().find(|d| d.covers(category)))
+    }
+}
+
+/// Collect `@aqs` directives from the file's comments.
+fn parse_directives(
+    root: &Node,
+    source: &[u8],
+    path: &str,
+) -> anyhow::Result<Vec<Directive>> {
+    let comments: Vec<(String, usize)> = metrics::all_nodes(root)
+        .iter()
+        .filter(|node| metrics::COMMENT_NODES.contains(&node.kind()))
+        .map(|node| {
+            (
+                metrics::text(node, source).to_string(),
+                node.start_position().row + 1,
+            )
+        })
+        .collect();
+    crate::directives::parse_all(&comments, path)
+}

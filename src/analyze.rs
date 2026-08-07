@@ -173,12 +173,16 @@ pub fn analyze_source(
 
     let effective = owned_source.as_deref().unwrap_or(source);
     let root = active.root_node();
+
     let ctx = FileContext::new(path.to_string(), spec, profile, root, effective);
-    let raw = detectors::detect(&ctx);
+    let (raw, suppressed) = detectors::detect(&ctx);
     let mut report = scoring::score_file(&ctx, raw);
     report.syntax_errors = errors;
+    report.suppressed = suppressed;
+    report.directive_error = ctx.directive_error.clone();
     report
 }
+
 
 fn analyze_job(job: &AnalysisJob, profile: &Profile) -> FileReport {
     let spec = crate::languages::spec_for_name(job.language).expect("language was resolved");
