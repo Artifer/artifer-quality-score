@@ -691,3 +691,43 @@ fn production_code_is_not_mistaken_for_tests() {
         assert!(!profile.is_test_path(path), "{path} is not test code");
     }
 }
+
+#[test]
+fn config_is_found_for_a_bare_filename_target() {
+    // `Path::new("thing.py").parent()` is Some(""), not None, so an upward search from
+    // it silently found nothing: `aqs check thing.py` ignored .aqs.json entirely. That
+    // is the single-file invocation editors and agent loops use.
+    let root = scratch_tree(
+        "bare-filename",
+        &[
+            (".aqs.json", r#"{"name":"demo","rules":{"Complex Conditional":0.0}}"#),
+            ("thing.py", "def f(a, b, c):\n    if a and b and c:\n        return 1\n"),
+        ],
+    );
+    let previous = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&root).expect("chdir");
+
+    let profile = aqs::profile::load_profile(std::path::Path::new("thing.py"), None)
+        .expect("config loads");
+    assert_eq!(profile.name, "demo", "config next to a bare filename must be found");
+    assert_eq!(profile.rule(prof::COMPLEX_CONDITIONAL).weight, 0.0);
+
+    std::env::set_current_dir(previous).expect("chdir back");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_empty_base_path_resolves_to_the_current_directory() {
+    // Guards the same trap at the profile layer directly.
+    let root = scratch_tree("empty-base", &[(".aqs.json", r#"{"name":"here"}"#)]);
+    let previous = std::env::current_dir().expect("cwd");
+    std::env::set_current_dir(&root).expect("chdir");
+
+    assert_eq!(
+        aqs::profile::load_profile(std::path::Path::new(""), None).expect("loads").name,
+        "here"
+    );
+
+    std::env::set_current_dir(previous).expect("chdir back");
+    let _ = std::fs::remove_dir_all(&root);
+}

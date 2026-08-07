@@ -208,12 +208,20 @@ fn resolve_targets(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, ExitCode> {
     Ok(targets)
 }
 
+/// The directory that config discovery and relative display paths hang off.
+///
+/// `Path::new("thing.py").parent()` is `Some("")`, not `None`, so an `unwrap_or(".")`
+/// never fires for a bare filename and the base silently becomes the empty path. That
+/// made `aqs check thing.py` skip `.aqs.json` entirely and print absolute paths — on
+/// exactly the single-file invocation the editor and agent loops use.
 fn base_of(targets: &[PathBuf]) -> PathBuf {
     let first = &targets[0];
     if first.is_dir() {
-        first.clone()
-    } else {
-        first.parent().unwrap_or(Path::new(".")).to_path_buf()
+        return first.clone();
+    }
+    match first.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
     }
 }
 

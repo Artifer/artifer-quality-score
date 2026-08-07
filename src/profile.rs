@@ -286,6 +286,16 @@ impl Profile {
     }
 }
 
+/// An empty path is not a directory and has no parent, so upward searches starting from
+/// one silently find nothing. Treat it as the current directory.
+fn normalise_start(start: &Path) -> PathBuf {
+    if start.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        start.to_path_buf()
+    }
+}
+
 /// The shadcn/ui component directory declared in `components.json`, as a repo-relative
 /// path like `shared/ui`.
 ///
@@ -295,6 +305,8 @@ impl Profile {
 /// duplication — which is the library's intended shape, not a defect. `components.json`
 /// states where it lives, so read it rather than guess.
 pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
+    let start = normalise_start(start);
+    let start = start.as_path();
     let mut directory: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
     while let Some(current) = directory {
         let candidate = current.join("components.json");
@@ -318,6 +330,8 @@ pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
 
 /// Nearest config file at or above `start`.
 pub fn find_config(start: &Path) -> Option<PathBuf> {
+    let start = normalise_start(start);
+    let start = start.as_path();
     let mut directory: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
     while let Some(current) = directory {
         for filename in CONFIG_FILENAMES {
