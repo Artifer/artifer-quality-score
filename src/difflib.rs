@@ -104,25 +104,24 @@ impl<'a> SequenceMatcher<'a> {
     /// Grow a match outwards while the elements on either side are equal.
     fn extend(&self, found: Match, window: Window) -> Match {
         let Match { mut a_start, mut b_start, mut size } = found;
-        while self.matches_before(a_start, b_start, &window) {
+        // Inline rather than behind `matches_before`/`matches_after` helpers: for a
+        // two-line loop, seeing the bounds check and the equality together says more
+        // than a predicate name does.
+        while a_start > window.a.start
+            && b_start > window.b.start
+            && self.a[a_start - 1] == self.b[b_start - 1]
+        {
             a_start -= 1;
             b_start -= 1;
             size += 1;
         }
-        while self.matches_after(a_start + size, b_start + size, &window) {
+        while a_start + size < window.a.end
+            && b_start + size < window.b.end
+            && self.a[a_start + size] == self.b[b_start + size]
+        {
             size += 1;
         }
         Match { a_start, b_start, size }
-    }
-
-    /// Whether the elements immediately before both positions are equal.
-    fn matches_before(&self, a_at: usize, b_at: usize, window: &Window) -> bool {
-        a_at > window.a.start && b_at > window.b.start && self.a[a_at - 1] == self.b[b_at - 1]
-    }
-
-    /// Whether the elements at both positions are equal and inside the window.
-    fn matches_after(&self, a_at: usize, b_at: usize, window: &Window) -> bool {
-        a_at < window.a.end && b_at < window.b.end && self.a[a_at] == self.b[b_at]
     }
 
     /// Total number of matched elements across all matching blocks.

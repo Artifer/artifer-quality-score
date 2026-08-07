@@ -462,19 +462,27 @@ Splitting the module satisfies both at once, and the resulting layout is easier 
 navigate than the 735-line original. There was no wall, only a reorganisation I had been
 avoiding.
 
-Three things worth knowing about the result:
+Four things worth knowing about the result:
 
+- **It is 9.98, not 10.00, on purpose.** `extend` in `difflib.rs` carries a Complex
+  Conditional finding, because inlining the bounds-and-equality checks into the two loop
+  conditions reads better than hiding them behind `matches_before`/`matches_after`
+  predicates. That is a deliberate, documented disagreement with the metric. A score is a
+  signal, not a target — and a repository that reports a permanent 10.00 has usually
+  stopped listening to its own tool.
 - **Nothing is exempted.** An earlier version of this section justified four disabled
   rules. All four turned out to be reachable by refactoring, so the config is gone.
 - **The refactor is verified behaviour-preserving.** Every change was checked by scoring
   nine real repositories with the previous release and diffing the findings, not just the
   scores. Two regressions surfaced that way and were fixed: excluding accessors from
-  *connectivity* as well as from counting could raise LCOM4 by removing the link that
-  held a class together, and a `super()` delegation that computes an argument
+  *connectivity* as well as from counting could raise LCOM4 by removing the link that held
+  a class together, and a `super()` delegation that computes an argument
   (`super().update(deleted_at=timezone.now())`) was no longer recognised as a delegation,
   which flagged a perfectly cohesive Django QuerySet.
-- **The last finding was in the tests.** Two of them were 95% structurally similar; the
-  fix was to make them table-driven, which is what the rule asks for.
+- **Fidelity to CPython is guaranteed by tests, not by structure.** `difflib.rs` pins
+  exact CPython return values, including the autojunk threshold. Those tests are what make
+  the port safe to refactor; mirroring CPython's function layout would not have added
+  anything, and its `find_longest_match` is 115 lines besides.
 
 If you point a model at this metric, the lesson is the one above: prefer the
 reorganisation you have been avoiding to a contorted local refactor, and verify against a
