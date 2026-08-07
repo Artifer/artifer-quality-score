@@ -242,9 +242,16 @@ Test files only:
   to stop declaring interfaces.
 - **Test classes are exempt from cohesion and size rules.** Independent test
   methods are the goal. See `test_exempt_rules`.
-- **Vendored code is excluded by default**, including `components/ui/*` — those
-  are generated shadcn/ui primitives whose near-identical thin wrappers are that
-  library's intended design, not duplication to fix.
+- **Vendored code is excluded by default**, including the shadcn/ui directory —
+  those are generated primitives whose near-identical thin `forwardRef` wrappers are
+  that library's intended design, not duplication to fix. shadcn is configurable, so
+  the location is read from `components.json` (`aliases.ui`) rather than assumed;
+  both `components/ui` and `shared/ui` are also static defaults, since a scan of a
+  subdirectory may never see `components.json`.
+- **Path patterns match whole paths *and* individual segments.** Without that, a
+  directory pattern like `*/e2e/*` needs a leading segment and misses `e2e/flow.ts` —
+  where Playwright actually puts its specs — so the same file would count as test code
+  or production code depending on which directory you scanned from.
 
 ## Configuration
 

@@ -647,3 +647,47 @@ fn an_explicit_scan_of_an_excluded_root_still_descends() {
     assert!(found.is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_root_level_test_directory_is_recognised() {
+    // Playwright puts specs in `e2e/` at the repository root. A pattern of `*/e2e/*`
+    // needs a leading segment, so without segment matching the same file counted as
+    // production code when scanned from the root and as test code from one level up.
+    let wall: String = (0..12).map(|i| format!("  expect(a{i}).toBe({i});\n")).collect();
+    let source = format!("it('checks', () => {{\n{wall}}});");
+
+    for path in ["e2e/flow.ts", "repo/e2e/flow.ts", "__tests__/thing.ts", "tests/thing.ts"] {
+        let report = score(&source, path, "typescript");
+        assert_eq!(
+            detail(&report, prof::LARGE_ASSERTION_BLOCKS).as_deref(),
+            Some("12 consecutive assertions"),
+            "{path} should be treated as test code"
+        );
+    }
+}
+
+#[test]
+fn test_classification_does_not_depend_on_the_scan_root() {
+    // The same file, addressed at two depths, must be scored identically.
+    let methods: String = (0..6)
+        .map(|i| format!("    def test_{i}(self):\n        assert thing_{i}() == {i}\n"))
+        .collect();
+    let source = format!("class TestThings:\n{methods}");
+    let shallow = score(&source, "tests/test_things.py", "python");
+    let deep = score(&source, "apps/core/tests/test_things.py", "python");
+    assert_eq!(shallow.score, deep.score);
+    assert_eq!(
+        categories(&shallow).contains(prof::LOW_COHESION),
+        categories(&deep).contains(prof::LOW_COHESION)
+    );
+}
+
+#[test]
+fn production_code_is_not_mistaken_for_tests() {
+    // The segment matching must not be so loose that ordinary paths become tests.
+    let profile = Profile::default();
+    for path in ["src/latest.ts", "apps/core/models.py", "src/contest/rules.ts",
+                 "src/e2e_helpers/util.ts", "src/protest.py"] {
+        assert!(!profile.is_test_path(path), "{path} is not test code");
+    }
+}

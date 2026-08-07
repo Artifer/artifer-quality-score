@@ -198,8 +198,13 @@ const EXCLUDE_PATTERNS: &[&str] = &[
     "*/.pytest_cache/*",
     // Vendored shadcn/ui primitives. These are generated third-party components, and
     // their near-identical thin wrappers are that library's intended design, not
-    // duplication anyone should "fix".
+    // duplication anyone should "fix". Both layouts seen in the wild are listed, and
+    // `detect_shadcn_ui` also reads the authoritative path out of `components.json`
+    // for projects that put it somewhere else again.
     "*/components/ui/*",
+    "components/ui/*",
+    "*/shared/ui/*",
+    "shared/ui/*",
     // `reference/` holds source material and one-off exploration scripts, not shipped
     // code. Across the Artifer repos it is overwhelmingly PDFs, spreadsheets and
     // exported decks; where it does contain code it is scratch work. Leaving it in let
@@ -248,26 +253,67 @@ impl Profile {
         &self.rules[category]
     }
 
-    pub fn is_test_path(&self, path: &str) -> bool {
-        self.test_patterns.iter().any(|pattern| fnmatch(path, pattern))
-    }
-
-    pub fn is_excluded(&self, path: &str) -> bool {
-        for pattern in &self.exclude_patterns {
+    /// Whether `path` matches any of `patterns`.
+    ///
+    /// Beyond a plain `fnmatch`, each pattern is also matched against every individual
+    /// path segment. Without that, a directory pattern like `*/e2e/*` needs a leading
+    /// segment and so fails on `e2e/flow.ts` — which is exactly where Playwright puts
+    /// its specs when you scan from the repository root. The result would be that the
+    /// same file counts as test code or production code depending on the scan root.
+    fn matches_any(path: &str, patterns: &[String]) -> bool {
+        for pattern in patterns {
             if fnmatch(path, pattern) {
                 return true;
             }
             let bare = strip_glob_chars(pattern);
-            if path.split('/').any(|part| fnmatch(part, bare)) {
+            if !bare.is_empty() && path.split('/').any(|part| fnmatch(part, bare)) {
                 return true;
             }
         }
         false
     }
 
+    pub fn is_test_path(&self, path: &str) -> bool {
+        Self::matches_any(path, &self.test_patterns)
+    }
+
+    pub fn is_excluded(&self, path: &str) -> bool {
+        Self::matches_any(path, &self.exclude_patterns)
+    }
+
     pub fn is_test_exempt(&self, category: &str) -> bool {
         self.test_exempt_rules.iter().any(|rule| rule == category)
     }
+}
+
+/// The shadcn/ui component directory declared in `components.json`, as a repo-relative
+/// path like `shared/ui`.
+///
+/// shadcn is configurable: across the Artifer repositories three of twelve put it in
+/// `@/shared/ui` rather than the more common `@/components/ui`. Hardcoding one layout
+/// silently scored the other three, reporting their thin `forwardRef` wrappers as
+/// duplication — which is the library's intended shape, not a defect. `components.json`
+/// states where it lives, so read it rather than guess.
+pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
+    let mut directory: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
+    while let Some(current) = directory {
+        let candidate = current.join("components.json");
+        if candidate.is_file() {
+            let text = std::fs::read_to_string(&candidate).ok()?;
+            let data: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let alias = data.get("aliases")?.get("ui")?.as_str()?;
+            // "@/shared/ui" and "~/shared/ui" both mean "shared/ui" from the root.
+            let path = alias
+                .trim()
+                .trim_start_matches('@')
+                .trim_start_matches('~')
+                .trim_start_matches('/')
+                .trim_end_matches('/');
+            return if path.is_empty() { None } else { Some(path.to_string()) };
+        }
+        directory = current.parent();
+    }
+    None
 }
 
 /// Nearest config file at or above `start`.
@@ -290,12 +336,25 @@ pub fn find_config(start: &Path) -> Option<PathBuf> {
 /// Unknown rule or threshold names are a hard error, never silently ignored: a typo
 /// that quietly disables a rule is the worst possible failure mode for a gate.
 pub fn load_profile(root: &Path, explicit: Option<&Path>) -> Result<Profile> {
+    // A declared shadcn directory is a fact about the repository, not a preference, so
+    // it is folded in whether or not there is an .aqs.json. Duplicates are harmless.
+    let with_shadcn = |mut profile: Profile| -> Profile {
+        if let Some(ui) = detect_shadcn_ui(root) {
+            for pattern in [format!("{ui}/*"), format!("*/{ui}/*")] {
+                if !profile.exclude_patterns.contains(&pattern) {
+                    profile.exclude_patterns.push(pattern);
+                }
+            }
+        }
+        profile
+    };
+
     let config = match explicit {
         Some(path) => Some(path.to_path_buf()),
         None => find_config(root),
     };
     let Some(config) = config else {
-        return Ok(Profile::default());
+        return Ok(with_shadcn(Profile::default()));
     };
 
     let text = std::fs::read_to_string(&config)
@@ -374,7 +433,7 @@ pub fn load_profile(root: &Path, explicit: Option<&Path>) -> Result<Profile> {
             rules.iter().filter_map(|v| v.as_str().map(String::from)).collect();
     }
 
-    Ok(profile)
+    Ok(with_shadcn(profile))
 }
 
 #[cfg(test)]
@@ -418,5 +477,77 @@ mod tests {
         let profile = Profile::default();
         assert_eq!(profile.rules.len(), RULE_DEFAULTS.len());
         assert_eq!(profile.thresholds.len(), THRESHOLD_KEYS.len());
+    }
+}
+
+#[cfg(test)]
+mod shadcn_tests {
+    use super::*;
+
+    fn scratch(name: &str, components_json: Option<&str>) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("aqs-shadcn-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        if let Some(body) = components_json {
+            std::fs::write(root.join("components.json"), body).expect("write");
+        }
+        root
+    }
+
+    #[test]
+    fn reads_the_declared_ui_directory() {
+        // Three of twelve Artifer frontends use @/shared/ui rather than
+        // @/components/ui, so the location has to be read, not assumed.
+        for (alias, expected) in [
+            ("@/shared/ui", "shared/ui"),
+            ("@/components/ui", "components/ui"),
+            ("~/app/primitives", "app/primitives"),
+            ("shared/ui", "shared/ui"),
+        ] {
+            let root = scratch("alias", Some(&format!(r#"{{"aliases":{{"ui":"{alias}"}}}}"#)));
+            assert_eq!(detect_shadcn_ui(&root).as_deref(), Some(expected), "{alias}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    #[test]
+    fn a_declared_ui_directory_is_excluded() {
+        let root = scratch("exclude", Some(r#"{"aliases":{"ui":"@/app/primitives"}}"#));
+        let profile = load_profile(&root, None).expect("loads");
+        assert!(profile.is_excluded("app/primitives/button.tsx"));
+        assert!(profile.is_excluded("src/app/primitives/button.tsx"));
+        // Unrelated code is untouched.
+        assert!(!profile.is_excluded("src/app/page.tsx"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn both_common_layouts_work_without_components_json() {
+        // Scanning a subdirectory may not see components.json at all, so the two
+        // observed layouts are also static defaults.
+        let profile = Profile::default();
+        assert!(profile.is_excluded("src/shared/ui/avatar.tsx"));
+        assert!(profile.is_excluded("src/components/ui/button.tsx"));
+        assert!(profile.is_excluded("shared/ui/tabs.tsx"));
+        // A `shared/` directory that is not the ui folder stays in scope.
+        assert!(!profile.is_excluded("src/shared/api/client.ts"));
+        assert!(!profile.is_excluded("src/shared/i18n/messages/en.ts"));
+    }
+
+    #[test]
+    fn a_missing_or_broken_components_json_is_not_fatal() {
+        let none = scratch("none", None);
+        assert!(detect_shadcn_ui(&none).is_none());
+        assert!(load_profile(&none, None).is_ok());
+        let _ = std::fs::remove_dir_all(&none);
+
+        let broken = scratch("broken", Some("{not json"));
+        assert!(detect_shadcn_ui(&broken).is_none());
+        assert!(load_profile(&broken, None).is_ok());
+        let _ = std::fs::remove_dir_all(&broken);
+
+        let empty = scratch("empty", Some(r#"{"aliases":{}}"#));
+        assert!(detect_shadcn_ui(&empty).is_none());
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }
