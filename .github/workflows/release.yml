@@ -19,8 +19,41 @@ permissions:
   contents: write
 
 jobs:
+  # Cheap checks first, so a mis-tagged commit fails in seconds with an explanation
+  # rather than as a cryptic cargo error partway through two platform builds. This is
+  # what `v0.6.2` needed: it was tagged with a stale Cargo.lock, every build failed on
+  # `--locked`, and the tag ended up published with no binaries behind it.
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Tag matches the crate version
+        run: |
+          crate=$(cargo metadata --no-deps --format-version 1 \
+            | tr ',' '\n' | grep -m1 '"version"' | cut -d'"' -f4)
+          if [ "v$crate" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $crate."
+            echo "Bump the version, commit, then re-tag."
+            exit 1
+          fi
+          echo "$GITHUB_REF_NAME matches Cargo.toml"
+
+      - name: Cargo.lock is in sync
+        run: |
+          if ! cargo metadata --locked --format-version 1 > /dev/null; then
+            echo "::error::Cargo.lock is stale, so the --locked release build cannot run."
+            echo "Run 'cargo check' to refresh it, commit the lock file, then re-tag."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.label }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

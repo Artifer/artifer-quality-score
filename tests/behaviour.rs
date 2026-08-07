@@ -549,7 +549,7 @@ fn a_cascaded_parse_never_rewrites_logical_operators() {
     assert_eq!(report.syntax_errors, 0);
     // 1 + 3 ifs + 3 `&&` = cc 7. If the operators had been rewritten it would read 4.
     let functions = &report.function_level_code_smells;
-    let complexity_survived = report.loc > 0 && functions.iter().all(|f| f.function != "");
+    let complexity_survived = report.loc > 0 && functions.iter().all(|f| !f.function.is_empty());
     assert!(complexity_survived);
     // Directly: the `&&` pairs must still be countable as boolean operators.
     let stricter = "export function P({ a, b, c }: Q) {\n  if (a && b && c) { return <i>x</i>; }\n  return <Empty description=\"W&S\" />;\n}\n";
@@ -622,7 +622,7 @@ fn excluded_directories_are_pruned_not_walked() {
         ],
     );
 
-    let found = aqs::analyze::discover(&[root.clone()], &Profile::default());
+    let found = aqs::analyze::discover(std::slice::from_ref(&root), &Profile::default());
     let names: Vec<String> = found
         .iter()
         .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))

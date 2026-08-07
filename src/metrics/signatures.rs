@@ -83,7 +83,7 @@ pub(crate) fn bare_type(type_name: &str) -> &str {
 pub fn is_primitive_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
     match type_name {
         None => false,
-        Some(name) if name.is_empty() => false,
+        Some("") => false,
         Some(name) => spec.primitive_types.contains(bare_type(name)),
     }
 }
@@ -91,7 +91,7 @@ pub fn is_primitive_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
 pub fn is_string_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
     match type_name {
         None => false,
-        Some(name) if name.is_empty() => false,
+        Some("") => false,
         Some(name) => {
             let trimmed = name.trim().trim_end_matches('?').trim();
             spec.string_types.contains(trimmed)
