@@ -1,0 +1,24 @@
+# Local loop: catch a regression before it becomes a commit.
+#
+# Add to .pre-commit-config.yaml in the repo you want to guard.
+#
+# This uses `aqs delta --staged`, not `aqs gate`. Deliberately: delta scores only
+# the staged files, so it finishes in well under a second and stays out of your
+# way. `gate` scans the whole tree on both sides — that belongs in CI, where
+# 1-2 seconds is free and the cache persists between runs.
+#
+# The division of labour:
+#   pre-commit  did *I* make anything worse?          (fast, changed files)
+#   CI          did the repository score go down?     (authoritative, whole tree)
+
+repos:
+  - repo: local
+    hooks:
+      - id: aqs-delta
+        name: Artifer Quality Score (staged changes)
+        entry: aqs delta --staged --max-drop 0.0
+        language: system
+        # Runs once for the whole changeset rather than once per file: the score
+        # is an aggregate, so per-file invocation would compare the wrong things.
+        pass_filenames: false
+        always_run: true

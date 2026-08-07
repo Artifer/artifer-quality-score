@@ -1,0 +1,96 @@
+# Artifer Quality Score — merge gate.
+#
+# Enforces the hard rule: the repository score may never go down.
+#
+# Copy to .github/workflows/quality-gate.yml in the repo you want to guard.
+#
+# Three things are essential and easy to get wrong:
+#
+#   fetch-depth: 0    Without full history there is no merge base, and the gate
+#                     silently has nothing to compare against.
+#
+#   the binary cache  `cargo install` builds from source (~40s). Caching
+#                     ~/.cargo/bin keeps it to a one-off cost.
+#
+#   the score cache   A scored file is a pure function of its bytes, so the
+#                     baseline side of the gate is ~100% cache hits after the
+#                     first run. Without this, every PR re-scores all of develop.
+#
+# The gate is a single static binary — no Python, Node or other runtime needed in
+# the repo being scored, which matters for Node-only frontend pipelines.
+
+name: Quality Gate
+
+on:
+  pull_request:
+    branches: [main, staging, develop]
+
+env:
+  AQS_VERSION: v0.1.0
+
+jobs:
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the merge base cannot be computed from a shallow clone.
+          fetch-depth: 0
+
+      - name: Cache the aqs binary
+        id: binary-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/aqs
+          key: aqs-bin-${{ runner.os }}-${{ env.AQS_VERSION }}
+
+      - name: Install Artifer Quality Score
+        if: steps.binary-cache.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/Artifer/artifer-quality-score.git \
+            --tag "$AQS_VERSION" --locked aqs
+
+      - name: Restore score cache
+        uses: actions/cache@v4
+        with:
+          path: .aqs
+          # The tool version and config are part of every cache key, so a stale
+          # entry can never be served under changed rules. Restoring an older
+          # cache is therefore always safe.
+          key: aqs-scores-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            aqs-scores-${{ runner.os }}-
+
+      - name: Enforce that the score never goes down
+        run: aqs gate --against "origin/${{ github.base_ref }}" --tolerance 0.0
+
+      - name: Report the score on the PR
+        if: always()
+        run: |
+          aqs gate --against "origin/${{ github.base_ref }}" --json > gate.json || true
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          data = json.loads(pathlib.Path("gate.json").read_text())
+          verdict = "PASS" if data["score_change"] >= -abs(data["tolerance"]) else "FAIL"
+          print(f"## Quality Gate: {verdict}\n")
+          print("| | Score | Files | LoC |")
+          print("|---|---|---|---|")
+          print(f"| baseline (`{data['baseline_revision'][:8]}`) "
+                f"| {data['baseline_score']:.2f} | {data['baseline_file_count']} "
+                f"| {data['baseline_loc']:,} |")
+          print(f"| this branch | {data['current_score']:.2f} "
+                f"| {data['current_file_count']} | {data['current_loc']:,} |")
+          print(f"| **change** | **{data['score_change']:+.2f}** | | |\n")
+          regressions = [f for f in data["files"] if f["score_change"] < 0]
+          if regressions:
+              print("### Files that lowered the score\n")
+              print("| File | Before | After | Change |")
+              print("|---|---|---|---|")
+              for entry in regressions:
+                  before = "new" if entry["old_score"] is None else f"{entry['old_score']:.2f}"
+                  after = "deleted" if entry["new_score"] is None else f"{entry['new_score']:.2f}"
+                  print(f"| `{entry['path']}` | {before} | {after} "
+                        f"| {entry['score_change']:+.2f} |")
+              print("\nRun `aqs explain \"<rule name>\"` for how to fix each finding.")
+          PY
