@@ -604,7 +604,7 @@ fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
             && (methods.len() as f64) > fn_threshold
             && has_brain_method
         {
-            let name = metrics::function_name(&class_node, ctx.source)
+            let name = metrics::class_name(&class_node, ctx.source)
                 .unwrap_or_else(|| "<anonymous class>".to_string());
             out.push(RawFinding {
                 category: prof::BRAIN_CLASS,
@@ -626,15 +626,19 @@ fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
 fn self_attributes(f: &FunctionContext, ctx: &FileContext) -> HashSet<String> {
     let mut fields = HashSet::new();
     for node in metrics::own_nodes(&f.node, ctx.spec, ctx.source) {
-        if !matches!(node.kind(), "attribute" | "member_expression") {
+        // Python `attribute`, TS/JS `member_expression`, Rust `field_expression` — the
+        // same construct under three names, with three sets of field names.
+        if !matches!(node.kind(), "attribute" | "member_expression" | "field_expression") {
             continue;
         }
-        let Some(object) = node.child_by_field_name("object") else {
-            continue;
-        };
+        let object = node
+            .child_by_field_name("object")
+            .or_else(|| node.child_by_field_name("value"));
+        let Some(object) = object else { continue };
         let attribute = node
             .child_by_field_name("attribute")
-            .or_else(|| node.child_by_field_name("property"));
+            .or_else(|| node.child_by_field_name("property"))
+            .or_else(|| node.child_by_field_name("field"));
         let Some(attribute) = attribute else { continue };
         let receiver = metrics::text(&object, ctx.source);
         if receiver == "self" || receiver == "this" {
@@ -660,7 +664,7 @@ fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
             .into_iter()
             .filter(|f| {
                 !f.is_constructor
-                    && !metrics::is_super_delegation(&f.node, ctx.spec, ctx.source)
+                    && !metrics::is_pure_accessor(&f.node, ctx.spec, ctx.source)
             })
             .collect();
         if methods.len() < 2 {
@@ -716,7 +720,7 @@ fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
             methods.iter().map(|f| find(&mut parent, &f.name)).collect();
         let components = roots.len();
         if (components as f64) > threshold {
-            let name = metrics::function_name(&class_node, ctx.source)
+            let name = metrics::class_name(&class_node, ctx.source)
                 .unwrap_or_else(|| "<anonymous class>".to_string());
             out.push(RawFinding {
                 category: prof::LOW_COHESION,

@@ -41,6 +41,9 @@ pub struct LanguageSpec {
     pub param_containers: HashSet<&'static str>,
     /// Implicit receiver parameters that should not count against a signature.
     pub implicit_params: HashSet<&'static str>,
+    /// Node kinds that *are* an implicit receiver. Rust models `&self` as its own
+    /// `self_parameter` node rather than a parameter whose text happens to be "self".
+    pub implicit_param_nodes: HashSet<&'static str>,
 
     /// Type names treated as primitives for Primitive Obsession.
     pub primitive_types: HashSet<&'static str>,
@@ -60,6 +63,10 @@ pub struct LanguageSpec {
 
     /// Nodes that declare types rather than behaviour (Lines of Declarations).
     pub declaration_nodes: HashSet<&'static str>,
+    /// Field marking a class-like node as implementing an external interface, if the
+    /// language has one. Rust's `impl Trait for Type` sets `trait`; the methods are
+    /// dictated by the trait, so cohesion rules must not judge the grouping.
+    pub external_interface_field: Option<&'static str>,
 }
 
 impl LanguageSpec {
@@ -104,6 +111,7 @@ fn python_spec() -> LanguageSpec {
         continuation_nodes: set(&["elif_clause", "else_clause"]),
         param_containers: set(&["parameters", "lambda_parameters"]),
         implicit_params: set(&["self", "cls", "mcs", "metacls"]),
+        implicit_param_nodes: HashSet::new(),
         primitive_types: set(&[
             "str", "int", "float", "bool", "bytes", "complex", "bytearray",
         ]),
@@ -113,6 +121,7 @@ fn python_spec() -> LanguageSpec {
         assertion_nodes: set(&["assert_statement"]),
         assertion_call_prefixes: &["assert", "expect", "self.assert"],
         declaration_nodes: HashSet::new(),
+        external_interface_field: None,
     }
 }
 
@@ -167,6 +176,7 @@ fn typescript_like(
         continuation_nodes: set(&["else_clause"]),
         param_containers: set(&["formal_parameters"]),
         implicit_params: set(&["this"]),
+        implicit_param_nodes: HashSet::new(),
         primitive_types: set(&["string", "number", "boolean", "bigint", "symbol"]),
         string_types: set(&["string"]),
         type_annotation_nodes: set(&["type_annotation"]),
@@ -178,11 +188,68 @@ fn typescript_like(
             "type_alias_declaration",
             "enum_declaration",
         ]),
+        external_interface_field: None,
     }
 }
 
-pub fn specs() -> &'static [LanguageSpec; 3] {
-    static SPECS: OnceLock<[LanguageSpec; 3]> = OnceLock::new();
+
+fn rust_spec() -> LanguageSpec {
+    LanguageSpec {
+        name: "rust",
+        extensions: &[".rs"],
+        language: || tree_sitter_rust::LANGUAGE.into(),
+        // A closure is anonymous unless bound to a name, which `function_name` handles
+        // via the `let_declaration` parent.
+        function_nodes: set(&["function_item", "closure_expression"]),
+        // Only inherent `impl` blocks. A `trait` declaration is an interface, and its
+        // methods are signatures rather than behaviour, so there is nothing to judge.
+        class_nodes: set(&["impl_item"]),
+        module_node: "source_file",
+        // `try_expression` -- the `?` operator -- is deliberately absent. It is linear
+        // error propagation, not a branch a reader has to hold in mind, and counting it
+        // would penalise idiomatic Rust for being explicit about failure.
+        decision_nodes: set(&[
+            "if_expression",
+            "while_expression",
+            "for_expression",
+            "loop_expression",
+            "match_arm",
+        ]),
+        boolean_op_nodes: set(&["binary_expression"]),
+        boolean_operators: set(&["&&", "||"]),
+        nesting_nodes: set(&[
+            "if_expression",
+            "while_expression",
+            "for_expression",
+            "loop_expression",
+            "match_expression",
+        ]),
+        continuation_nodes: set(&["else_clause"]),
+        param_containers: set(&["parameters", "closure_parameters"]),
+        implicit_params: set(&["self", "&self", "&mut self", "mut self"]),
+        implicit_param_nodes: set(&["self_parameter"]),
+        primitive_types: set(&[
+            "i8", "i16", "i32", "i64", "i128", "isize",
+            "u8", "u16", "u32", "u64", "u128", "usize",
+            "f32", "f64", "bool", "char",
+            "str", "&str", "String", "&String",
+        ]),
+        string_types: set(&["str", "&str", "String", "&String"]),
+        // A Rust parameter carries its type in a `type` field rather than in a wrapper
+        // node, which `parameter_type` already falls back to.
+        type_annotation_nodes: HashSet::new(),
+        // `new` is the convention, so a `new` with a long argument list is the same
+        // smell Constructor Over-Injection describes elsewhere.
+        constructor_names: set(&["new"]),
+        assertion_nodes: HashSet::new(),
+        assertion_call_prefixes: &["assert", "debug_assert", "expect", "panic"],
+        declaration_nodes: set(&["struct_item", "enum_item", "trait_item", "type_item"]),
+        external_interface_field: Some("trait"),
+    }
+}
+
+pub fn specs() -> &'static [LanguageSpec; 4] {
+    static SPECS: OnceLock<[LanguageSpec; 4]> = OnceLock::new();
     SPECS.get_or_init(|| {
         [
             python_spec(),
@@ -199,6 +266,7 @@ pub fn specs() -> &'static [LanguageSpec; 3] {
                 &[".js", ".jsx", ".mjs", ".cjs"],
                 || tree_sitter_javascript::LANGUAGE.into(),
             ),
+            rust_spec(),
         ]
     })
 }
@@ -234,7 +302,8 @@ mod tests {
         assert_eq!(spec_for_path("a/b.tsx").unwrap().name, "typescript");
         assert_eq!(spec_for_path("a/b.ts").unwrap().name, "typescript");
         assert_eq!(spec_for_path("a/b.mjs").unwrap().name, "javascript");
-        assert!(spec_for_path("a/b.rs").is_none());
+        assert_eq!(spec_for_path("a/b.rs").unwrap().name, "rust");
+        assert!(spec_for_path("a/b.go").is_none());
         assert!(spec_for_path("Makefile").is_none());
     }
 

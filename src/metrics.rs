@@ -31,6 +31,8 @@ const NAMING_PARENTS: &[&str] = &[
     "pair",
     "public_field_definition",
     "field_definition",
+    // Rust binds a closure with `let name = |..| ..`, naming it via `pattern`.
+    "let_declaration",
 ];
 
 /// Base classes that mark a type as an interface rather than an implementation.
@@ -128,7 +130,7 @@ pub fn function_name(node: &Node, source: &[u8]) -> Option<String> {
     // `const load = async () => {}` is a named unit even though the arrow is not.
     let parent = node.parent()?;
     if NAMING_PARENTS.contains(&parent.kind()) {
-        for field in ["name", "left", "key"] {
+        for field in ["name", "left", "key", "pattern"] {
             if let Some(named) = parent.child_by_field_name(field) {
                 return Some(text(&named, source).to_string());
             }
@@ -355,6 +357,11 @@ pub fn parameters<'tree>(
         if is_comment(&param) {
             continue;
         }
+        // Rust models `&self` as its own node kind rather than a parameter whose text
+        // happens to read "self", so both forms have to be recognised.
+        if spec.implicit_param_nodes.contains(param.kind()) {
+            continue;
+        }
         if spec.implicit_params.contains(text(&param, source).trim()) {
             continue;
         }
@@ -431,33 +438,71 @@ fn has_stub_body(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     true
 }
 
-/// Whether a method's whole body just forwards to the superclass.
+/// The identifying name of a class-like node.
 ///
-/// `def get(self, *a, **kw): return super().get(*a, **kw)` exists to hang a decorator
-/// on — an `@extend_schema` for API docs, a permission marker — not to hold state. It
-/// has no fields and calls no siblings by design, so cohesion metrics count each one
-/// as its own responsibility and condemn otherwise-fine classes. Excluded for the same
-/// reason constructors and abstract stubs are.
-pub fn is_super_delegation(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
+/// Rust `impl` blocks have no `name`; their identity is the `type` they implement.
+pub fn class_name(node: &Node, source: &[u8]) -> Option<String> {
+    if let Some(name) = function_name(node, source) {
+        return Some(name);
+    }
+    node.child_by_field_name("type")
+        .map(|t| text(&t, source).to_string())
+}
+
+/// Whether a method is a pure projection of stored state.
+///
+/// One statement, no branching, **no calls at all**, and it touches a field of `self`:
+/// `fn threshold(&self) -> f64 { self.thresholds[key] }`, `def get(self): return
+/// super().get()`, `return self.amount * 2`.
+///
+/// LCOM4 counts every method touching a distinct field as its own component, so a
+/// value object with six accessors scores 6 and reads as six unrelated jobs. Splitting
+/// it would be absurd, so accessors are excluded like constructors and abstract stubs.
+///
+/// The "no calls" condition is what keeps this narrow, and it is load-bearing.
+/// `self.orders.append(o)` and `len(self.orders)` both call something, so a class that
+/// merely appends to two different collections is still correctly condemned — that is
+/// real low cohesion, not an accessor.
+pub fn is_pure_accessor(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     let Some(body) = function_body(node, spec) else {
         return false;
     };
-    let mut meaningful = 0;
+    let mut only: Option<Node> = None;
     for statement in named_children(&body) {
         if is_comment(&statement) || is_docstring(&statement) {
             continue;
         }
-        let text_body = text(&statement, source).trim();
-        let forwards = text_body.starts_with("return super()")
-            || text_body.starts_with("super()")
-            || text_body.starts_with("return super.")
-            || text_body.starts_with("super.");
-        if !forwards {
+        if only.is_some() {
+            return false; // more than one meaningful statement
+        }
+        only = Some(statement);
+    }
+    let Some(statement) = only else {
+        return false; // an empty body is a stub, handled by `has_stub_body`
+    };
+
+    let mut touches_state = false;
+    for current in own_nodes(&statement, spec, source) {
+        let kind = current.kind();
+        if spec.nesting_nodes.contains(kind) || spec.decision_nodes.contains(kind) {
             return false;
         }
-        meaningful += 1;
+        if matches!(
+            kind,
+            "call" | "call_expression" | "macro_invocation" | "await_expression" | "await"
+        ) {
+            // `super().get(...)` is the one call that is still a pure delegation.
+            let text_body = text(&current, source);
+            if !(text_body.contains("super()") || text_body.contains("super.")) {
+                return false;
+            }
+            touches_state = true;
+        }
+        if matches!(kind, "attribute" | "member_expression" | "field_expression") {
+            touches_state = true;
+        }
     }
-    meaningful > 0
+    touches_state
 }
 
 /// Whether a class is an interface — abstract, Protocol, or all-stubs.
@@ -468,6 +513,14 @@ pub fn is_super_delegation(node: &Node, spec: &LanguageSpec, source: &[u8]) -> b
 pub fn is_abstract_class(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     if node.kind().contains("abstract") {
         return true;
+    }
+    // `impl Trait for Type`: the method set is dictated by the trait, so grouping is
+    // not a choice the author made and cohesion has nothing to say about it. Same
+    // reasoning as the exemptions for abstract bases and super()-only overrides.
+    if let Some(field) = spec.external_interface_field {
+        if node.child_by_field_name(field).is_some() {
+            return true;
+        }
     }
     // An `abstract` modifier on a TS class declaration.
     if node.prev_sibling().map(|p| p.kind() == "abstract").unwrap_or(false) {
@@ -516,7 +569,11 @@ pub fn is_assertion(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
         return false;
     }
     let expression = node.named_child(0).expect("named_child_count checked");
-    if !matches!(expression.kind(), "call_expression" | "call" | "await_expression") {
+    // `macro_invocation` covers Rust's assert!/assert_eq!/debug_assert! family.
+    if !matches!(
+        expression.kind(),
+        "call_expression" | "call" | "await_expression" | "macro_invocation"
+    ) {
         return false;
     }
     let raw = text(&expression, source);

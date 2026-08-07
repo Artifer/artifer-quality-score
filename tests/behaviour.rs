@@ -375,7 +375,7 @@ fn a_method_that_does_more_than_delegate_still_counts() {
     let report = py(
         "class C(Base):\n\
          \x20   def a(self):\n\
-         \x20       return self.thing\n\
+         \x20       return compute(self.thing)\n\
          \x20   def b(self, request):\n\
          \x20       audit(request)\n\
          \x20       return super().b(request)\n",
@@ -730,4 +730,167 @@ fn an_empty_base_path_resolves_to_the_current_directory() {
 
     std::env::set_current_dir(previous).expect("chdir back");
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// --------------------------------------------------------------------------- //
+// Rust
+// --------------------------------------------------------------------------- //
+
+fn rs(source: &str) -> FileReport {
+    score(source, "sample.rs", "rust")
+}
+
+#[test]
+fn rust_complexity_counts_branches_match_arms_and_boolean_operators() {
+    let arms: String = (0..12).map(|i| format!("        {i} => {i},\n")).collect();
+    let report = rs(&format!(
+        "pub fn classify(v: u8) -> u8 {{\n    match v {{\n{arms}        _ => 0,\n    }}\n}}\n"
+    ));
+    // 1 + 13 match arms = cc 14.
+    assert_eq!(detail(&report, prof::COMPLEX_METHOD).as_deref(), Some("cc = 14"));
+}
+
+#[test]
+fn rust_question_mark_is_not_a_branch() {
+    // `?` is linear error propagation, not a decision the reader tracks. Counting it
+    // would penalise idiomatic Rust for being explicit about failure.
+    let calls: String = (0..20).map(|i| format!("    let v{i} = step{i}()?;\n")).collect();
+    let report = rs(&format!("pub fn run() -> Result<(), E> {{\n{calls}    Ok(())\n}}\n"));
+    assert!(!categories(&report).contains(prof::COMPLEX_METHOD), "{:?}", report.all_findings());
+}
+
+#[test]
+fn rust_self_is_not_an_argument() {
+    // `&self` is its own node kind, not a parameter whose text reads "self".
+    let report = rs(
+        "impl S {\n    pub fn f(&self, a: u8, b: u8, c: u8, d: u8) -> u8 { a + b + c + d }\n}\n",
+    );
+    assert!(!categories(&report).contains(prof::EXCESS_ARGUMENTS));
+
+    let too_many = rs(
+        "impl S {\n    pub fn f(&self, a: u8, b: u8, c: u8, d: u8, e: u8) -> u8 { a }\n}\n",
+    );
+    assert_eq!(
+        detail(&too_many, prof::EXCESS_ARGUMENTS).as_deref(),
+        Some("Arguments = 5")
+    );
+}
+
+#[test]
+fn rust_else_if_chains_stay_flat() {
+    let chain: String = (0..8)
+        .map(|i| format!("{} x == {i} {{ return {i}; }}", if i == 0 { "if" } else { " else if" }))
+        .collect();
+    let report = rs(&format!("pub fn f(x: u8) -> u8 {{\n    {chain}\n    0\n}}\n"));
+    assert!(!categories(&report).contains(prof::DEEP_NESTED_COMPLEXITY));
+}
+
+#[test]
+fn rust_nesting_is_measured() {
+    let report = rs(
+        "pub fn f(a: bool, xs: &[u8]) -> u8 {\n    if a {\n        for x in xs {\n            while *x > 0 {\n                if *x > 1 {\n                    return *x;\n                }\n            }\n        }\n    }\n    0\n}\n",
+    );
+    assert_eq!(
+        detail(&report, prof::DEEP_NESTED_COMPLEXITY).as_deref(),
+        Some("Nesting depth = 4 conditionals")
+    );
+}
+
+#[test]
+fn rust_assert_macros_are_assertions() {
+    let wall: String = (0..12).map(|i| format!("        assert_eq!(a{i}, {i});\n")).collect();
+    let report = score(
+        &format!("#[cfg(test)]\nmod tests {{\n    #[test]\n    fn it_works() {{\n{wall}    }}\n}}\n"),
+        "tests/thing.rs",
+        "rust",
+    );
+    assert_eq!(
+        detail(&report, prof::LARGE_ASSERTION_BLOCKS).as_deref(),
+        Some("12 consecutive assertions")
+    );
+}
+
+#[test]
+fn rust_trait_impls_are_exempt_from_cohesion() {
+    // The method set of `impl Trait for Type` is dictated by the trait, so its grouping
+    // is not the author's choice — the same reasoning as ABCs and super()-only overrides.
+    let report = rs(
+        "impl Display for Money {\n    fn fmt(&self, f: &mut Formatter) -> Result { write!(f, \"{}\", self.amount) }\n    fn other(&self) -> u8 { 1 }\n}\n",
+    );
+    assert!(!categories(&report).contains(prof::LOW_COHESION));
+}
+
+#[test]
+fn rust_inherent_impls_are_judged_for_cohesion() {
+    let report = rs(
+        "impl Mixed {\n    fn add_order(&mut self, o: u8) { self.orders.push(o) }\n    fn count_orders(&self) -> usize { self.orders.len() }\n    fn add_email(&mut self, e: u8) { self.emails.push(e) }\n    fn count_emails(&self) -> usize { self.emails.len() }\n}\n",
+    );
+    let details = detail(&report, prof::LOW_COHESION).expect("fires on an inherent impl");
+    assert!(details.contains("LCOM4 = 2"), "{details}");
+}
+
+#[test]
+fn rust_named_closures_are_their_own_unit() {
+    let branches: String = (0..14).map(|i| format!("        if x == {i} {{ return {i}; }}\n")).collect();
+    let report = rs(&format!(
+        "pub fn outer(x: u8) -> u8 {{\n    let inner = |x: u8| -> u8 {{\n{branches}        0\n    }};\n    inner(x)\n}}\n"
+    ));
+    let flagged: HashSet<String> = report
+        .all_findings()
+        .iter()
+        .filter(|f| f.category == prof::COMPLEX_METHOD)
+        .map(|f| f.function.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(flagged, HashSet::from(["inner".to_string()]));
+}
+
+#[test]
+fn pure_accessors_are_exempt_but_mutators_are_not() {
+    // A value object of accessors is not six responsibilities; splitting it would be
+    // absurd. But a class that merely appends to two unrelated collections is real low
+    // cohesion, and the "no calls" condition is what keeps those apart.
+    let accessors = py(
+        "class Config:\n\
+         \x20   def timeout(self):\n\
+         \x20       return self._timeout\n\
+         \x20   def retries(self):\n\
+         \x20       return self._retries\n\
+         \x20   def host(self):\n\
+         \x20       return self._host\n",
+    );
+    assert!(
+        !categories(&accessors).contains(prof::LOW_COHESION),
+        "accessors: {:?}",
+        accessors.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
+    );
+
+    let mutators = py(
+        "class Mixed:\n\
+         \x20   def add_order(self, o):\n\
+         \x20       self.orders.append(o)\n\
+         \x20   def count_orders(self):\n\
+         \x20       return len(self.orders)\n\
+         \x20   def add_email(self, e):\n\
+         \x20       self.emails.append(e)\n\
+         \x20   def count_emails(self):\n\
+         \x20       return len(self.emails)\n",
+    );
+    assert!(
+        categories(&mutators).contains(prof::LOW_COHESION),
+        "mutators touching two collections must still be condemned"
+    );
+}
+
+#[test]
+fn rust_impl_blocks_are_named_by_their_type() {
+    // `impl Money` has no `name` field; its identity is the type it implements.
+    let report = rs(
+        "impl Mixed {\n    fn add_order(&mut self, o: u8) { self.orders.push(o) }\n    fn count_orders(&self) -> usize { self.orders.len() }\n    fn add_email(&mut self, e: u8) { self.emails.push(e) }\n    fn count_emails(&self) -> usize { self.emails.len() }\n}\n",
+    );
+    let finding = report
+        .all_findings()
+        .into_iter()
+        .find(|f| f.category == prof::LOW_COHESION)
+        .expect("fires");
+    assert_eq!(finding.function.as_deref(), Some("Mixed"));
 }

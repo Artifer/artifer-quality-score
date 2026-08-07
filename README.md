@@ -1,7 +1,7 @@
 # Artifer Quality Score
 
-A deterministic, explainable code quality score for Python, TypeScript and
-JavaScript. One number per file from 1.0 to 10.0, with every deducted point
+A deterministic, explainable code quality score for Python, TypeScript, JavaScript
+and Rust. One number per file from 1.0 to 10.0, with every deducted point
 traceable to a named code smell at a specific line.
 
 A single static binary — no runtime to install in the repository being scored,
@@ -242,6 +242,17 @@ Test files only:
   to stop declaring interfaces.
 - **Test classes are exempt from cohesion and size rules.** Independent test
   methods are the goal. See `test_exempt_rules`.
+- **Rust `?` is not a branch.** It is linear error propagation, not a decision a
+  reader has to hold in mind, so counting it would penalise idiomatic Rust for being
+  explicit about failure. `match` arms *are* counted, one each.
+- **Rust `impl Trait for Type` is exempt from cohesion**, because the method set is
+  dictated by the trait rather than chosen by the author — the same reasoning as
+  abstract bases and `super()`-only overrides. Inherent `impl` blocks are judged.
+- **Pure accessors are exempt from cohesion.** One statement, no branching and no
+  calls, touching a field: a value object with six getters is not six unrelated jobs.
+  The no-calls condition is load-bearing — `self.orders.append(o)` calls something, so
+  a class appending to two unrelated collections is still correctly condemned.
+
 - **Vendored code is excluded by default**, including the shadcn/ui directory —
   those are generated primitives whose near-identical thin `forwardRef` wrappers are
   that library's intended design, not duplication to fix. shadcn is configurable, so
