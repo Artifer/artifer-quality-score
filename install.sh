@@ -2,32 +2,28 @@
 #
 # Install the aqs binary from a GitHub Release.
 #
-#   ./install.sh                      # latest release into ~/.local/bin
-#   ./install.sh v0.3.0               # a specific tag
+#   curl -fsSL https://raw.githubusercontent.com/Artifer/artifer-quality-score/master/install.sh | bash
+#
+#   ./install.sh                       # latest release into ~/.local/bin
+#   ./install.sh v0.3.0                # pin a version
 #   PREFIX=/usr/local/bin ./install.sh
 #
-# Piped straight from the repository:
+# Needs only curl and tar. The download is checksum-verified against the SHA256SUMS
+# published alongside the release — worth doing for anything piped into a shell.
 #
-#   curl -fsSL -H "Authorization: Bearer $(gh auth token)" \
-#     https://raw.githubusercontent.com/Artifer/artifer-quality-score/master/install.sh \
-#     | GH_TOKEN="$(gh auth token)" bash
-#
-# The repository is private, so every download needs credentials — GitHub does not
-# serve release assets of a private repository anonymously. Two paths are supported:
-#
-#   token   GH_TOKEN / GITHUB_TOKEN, using nothing but curl and tar. This is the
-#           path for CI containers and anywhere `gh` is not installed.
-#   gh      Falls back to `gh release download` when no token is set, which every
-#           developer here already has authenticated.
+# GH_TOKEN / GITHUB_TOKEN are honoured if set, which matters only for API rate limits
+# or if you have forked this into a private repository.
 #
 set -euo pipefail
 
 REPO="${AQS_REPO:-Artifer/artifer-quality-score}"
 TAG="${1:-}"
 PREFIX="${PREFIX:-$HOME/.local/bin}"
-API="https://api.github.com/repos/${REPO}"
 
 die() { echo "error: $*" >&2; exit 1; }
+
+command -v curl >/dev/null 2>&1 || die "curl is required"
+command -v tar  >/dev/null 2>&1 || die "tar is required"
 
 # Map uname onto the asset naming used by .github/workflows/release.yml.
 case "$(uname -s)" in
@@ -43,59 +39,56 @@ case "$(uname -s)" in
 esac
 
 token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-if [ -z "$token" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-  token="$(gh auth token 2>/dev/null || true)"
+
+# A function rather than an array of curl flags: macOS still ships bash 3.2, where
+# expanding an empty array under `set -u` is an unbound-variable error.
+fetch() { # fetch <url> <output-path>
+  if [ -n "$token" ]; then
+    curl -fsSL -H "Authorization: Bearer $token" "$1" -o "$2"
+  else
+    curl -fsSL "$1" -o "$2"
+  fi
+}
+
+if [ -z "$TAG" ]; then
+  latest="$(mktemp)"
+  fetch "https://api.github.com/repos/${REPO}/releases/latest" "$latest" \
+    || die "could not reach the GitHub API to resolve the latest release"
+  TAG="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$latest" | head -1)"
+  rm -f "$latest"
+  [ -n "$TAG" ] || die "could not resolve the latest release tag"
 fi
+
+name="aqs-${TAG}-${asset}.tar.gz"
+base="https://github.com/${REPO}/releases/download/${TAG}"
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
-tarball="$workdir/aqs.tar.gz"
 
-if [ -n "$token" ]; then
-  command -v curl >/dev/null 2>&1 || die "curl is required"
+echo "Downloading ${name}..."
+fetch "${base}/${name}" "$workdir/$name" \
+  || die "no such asset: ${base}/${name}"
 
-  release_url="$API/releases/latest"
-  [ -n "$TAG" ] && release_url="$API/releases/tags/$TAG"
-
-  release_json="$workdir/release.json"
-  curl -fsSL -H "Authorization: Bearer $token" \
-       -H "Accept: application/vnd.github+json" \
-       "$release_url" -o "$release_json" \
-    || die "cannot read the release. Is the token valid and does it have repo read access?"
-
-  # Find the asset id without requiring jq. The API pretty-prints, so id and name sit
-  # on separate lines; in a GitHub asset object "id" always precedes "name", so the
-  # last id seen before the matching name is the one we want. `"node_id"` cannot be
-  # confused with `"id"` because the pattern demands a quote immediately before it.
-  asset_id="$(awk -v want="${asset}.tar.gz" '
-    /"id"[[:space:]]*:[[:space:]]*[0-9]+/ {
-      if (match($0, /[0-9]+/)) last = substr($0, RSTART, RLENGTH)
-    }
-    /"name"[[:space:]]*:/ {
-      if (index($0, want) > 0) { print last; exit }
-    }
-  ' "$release_json")"
-  [ -n "$asset_id" ] || die "no asset matching *${asset}.tar.gz in that release"
-
-  echo "Downloading aqs (${asset})..."
-  curl -fsSL -H "Authorization: Bearer $token" \
-       -H "Accept: application/octet-stream" \
-       "$API/releases/assets/${asset_id}" -o "$tarball" \
-    || die "download failed"
-else
-  command -v gh >/dev/null 2>&1 \
-    || die "set GH_TOKEN (or GITHUB_TOKEN), or install gh — the repository is private"
-  echo "Downloading aqs (${asset}) via gh..."
-  if [ -n "$TAG" ]; then
-    gh release download "$TAG" --repo "$REPO" --pattern "*${asset}.tar.gz" --dir "$workdir"
-  else
-    gh release download --repo "$REPO" --pattern "*${asset}.tar.gz" --dir "$workdir"
+# Verify integrity. A missing SHA256SUMS is a warning rather than fatal so that an
+# older release without one can still be installed.
+if fetch "${base}/SHA256SUMS" "$workdir/SHA256SUMS" 2>/dev/null; then
+  expected="$(awk -v f="$name" '$2 == f || $2 == "*"f { print $1 }' "$workdir/SHA256SUMS")"
+  if [ -n "$expected" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual="$(sha256sum "$workdir/$name" | cut -d' ' -f1)"
+    else
+      actual="$(shasum -a 256 "$workdir/$name" | cut -d' ' -f1)"
+    fi
+    [ "$actual" = "$expected" ] || die "checksum mismatch
+  expected $expected
+  actual   $actual"
+    echo "Checksum verified."
   fi
-  tarball="$(find "$workdir" -name '*.tar.gz' -print -quit)"
-  [ -n "$tarball" ] || die "no asset matched *${asset}.tar.gz"
+else
+  echo "warning: no SHA256SUMS published for ${TAG}; skipping verification" >&2
 fi
 
-tar -xzf "$tarball" -C "$workdir"
+tar -xzf "$workdir/$name" -C "$workdir"
 [ -f "$workdir/aqs" ] || die "the archive did not contain an aqs binary"
 mkdir -p "$PREFIX"
 install -m 755 "$workdir/aqs" "$PREFIX/aqs"
