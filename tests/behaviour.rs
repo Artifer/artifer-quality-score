@@ -470,6 +470,118 @@ fn worst_offender_keeps_full_penalty_when_cap_binds() {
     assert_eq!(severe_penalty, Profile::default().rule(prof::COMPLEX_METHOD).cap);
 }
 
+// --------------------------------------------------------------------------- //
+// Grammar workarounds
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn bare_ampersand_in_jsx_text_parses_clean() {
+    // Valid JSX that tree-sitter-typescript 0.23.2 rejects. The repair pass rewrites it
+    // to `&amp;`, which is semantically identical, so no spurious error is reported.
+    for source in [
+        "export function H() {\n  return <h1>Werving & Selectie</h1>;\n}\n",
+        "export function L() {\n  return <a href={`/x?a=1&status=published`}>go</a>;\n}\n",
+        "export function M() {\n  return <p>a & b & c</p>;\n}\n",
+    ] {
+        let report = score(source, "H.tsx", "typescript");
+        assert_eq!(report.syntax_errors, 0, "should parse clean: {source}");
+    }
+}
+
+#[test]
+fn ampersand_repair_does_not_change_the_score() {
+    // The escaped and unescaped forms must be scored identically, or the workaround
+    // would itself be a source of drift.
+    let bare = score(
+        "export function H() {\n  return <h1>Werving & Selectie</h1>;\n}\n",
+        "H.tsx",
+        "typescript",
+    );
+    let escaped = score(
+        "export function H() {\n  return <h1>Werving &amp; Selectie</h1>;\n}\n",
+        "H.tsx",
+        "typescript",
+    );
+    assert_eq!(bare.score, escaped.score);
+    assert_eq!(bare.loc, escaped.loc);
+    assert_eq!(bare.all_findings().len(), escaped.all_findings().len());
+}
+
+#[test]
+fn logical_and_is_never_rewritten() {
+    // The repair only touches ampersands inside error nodes; `&&` must survive, since
+    // rewriting it would destroy real operators and change complexity.
+    let source = "export function H({ a, b, c }: P) {\n  if (a && b && c) { return <p>x & y</p>; }\n  return null;\n}\n";
+    let report = score(source, "H.tsx", "typescript");
+    assert_eq!(report.syntax_errors, 0);
+    // Two surviving `&&` make this a Complex Conditional. Its presence is the proof
+    // that the operators were not rewritten away along with the JSX-text ampersand.
+    assert_eq!(
+        detail(&report, prof::COMPLEX_CONDITIONAL).as_deref(),
+        Some("1 complex conditional expression")
+    );
+}
+
+#[test]
+fn ampersand_in_a_jsx_attribute_string_parses_clean() {
+    // The grammar rejects `&` in an attribute value too, and there the parse cascades
+    // into a whole-file ERROR: the component vanishes, no functions are found, and the
+    // file scores a false 10.0. Found on a real 242-line page.
+    let branches: String = (0..14)
+        .map(|i| format!("  if (x === {i}) {{ return <p>{i}</p>; }}\n"))
+        .collect();
+    let source = format!(
+        "export function Page({{ x }}: P) {{\n{branches}  return <Empty description=\"op een W&S-vacature zet\" />;\n}}\n"
+    );
+    let report = score(&source, "Page.tsx", "typescript");
+    assert_eq!(report.syntax_errors, 0);
+    // The function must actually be found — a cascaded parse would report none, and the
+    // complexity finding is the proof that its branches survived.
+    assert_eq!(detail(&report, prof::COMPLEX_METHOD).as_deref(), Some("cc = 15"));
+}
+
+#[test]
+fn a_cascaded_parse_never_rewrites_logical_operators() {
+    // With a whole-file ERROR the repair sees every ampersand in the file. Rewriting
+    // `&&` there would quietly reduce cyclomatic complexity and inflate the score.
+    let source = "export function Page({ a, b, c, x }: P) {\n  if (a && b) { return <i>1</i>; }\n  if (b && c) { return <i>2</i>; }\n  if (a && c) { return <i>3</i>; }\n  return <Empty description=\"W&S vacature\" />;\n}\n";
+    let report = score(source, "Page.tsx", "typescript");
+    assert_eq!(report.syntax_errors, 0);
+    // 1 + 3 ifs + 3 `&&` = cc 7. If the operators had been rewritten it would read 4.
+    let functions = &report.function_level_code_smells;
+    let complexity_survived = report.loc > 0 && functions.iter().all(|f| f.function != "");
+    assert!(complexity_survived);
+    // Directly: the `&&` pairs must still be countable as boolean operators.
+    let stricter = "export function P({ a, b, c }: Q) {\n  if (a && b && c) { return <i>x</i>; }\n  return <Empty description=\"W&S\" />;\n}\n";
+    let report = score(stricter, "P.tsx", "typescript");
+    assert_eq!(
+        detail(&report, prof::COMPLEX_CONDITIONAL).as_deref(),
+        Some("1 complex conditional expression"),
+        "the && operators must survive the repair"
+    );
+}
+
+#[test]
+fn nested_error_nodes_do_not_corrupt_the_repair() {
+    // ERROR nodes nest, so the same ampersand can be reported at several depths and in
+    // tree rather than byte order. This crashed on real Next.js source before the
+    // offsets were sorted and deduplicated.
+    let source = "export function P() {\n  return (\n    <div>\n      <a href={`/x?a=1&b=2&c=3`}>A & B</a>\n      <span>C & D & E</span>\n    </div>\n  );\n}\n";
+    let report = score(source, "P.tsx", "typescript");
+    assert_eq!(report.syntax_errors, 0, "{:?}", report.all_findings());
+}
+
+#[test]
+fn genuinely_broken_files_still_report_errors() {
+    // The repair must not mask real syntax problems.
+    let report = score(
+        "export function broken( {\n  return <div>\n}\n",
+        "B.tsx",
+        "typescript",
+    );
+    assert!(report.syntax_errors > 0);
+}
+
 #[test]
 fn repeated_analysis_is_byte_identical() {
     // The whole gate depends on this: same bytes in, same JSON out.

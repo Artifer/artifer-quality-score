@@ -10,6 +10,7 @@
 
 use crate::cache::{content_key, Cache};
 use crate::detectors::{self, FileContext};
+use crate::metrics;
 use crate::languages::{spec_for_path, LanguageSpec};
 use crate::models::{aggregate_score, FileReport, ScanReport};
 use crate::profile::Profile;
@@ -46,6 +47,78 @@ fn count_syntax_errors(root: &Node) -> usize {
     errors
 }
 
+/// Rewrite bare `&` inside parser errors as `&amp;`, if that is all that failed.
+///
+/// A bare `&` in JSX text (`<h1>Werving & Selectie</h1>`, a URL query string) is valid
+/// JSX that React renders literally, but tree-sitter-typescript 0.23.2 — the newest
+/// published grammar — rejects it. On a real 47k-LoC Next.js codebase this produced
+/// spurious errors in 18 files.
+///
+/// The errors are inert: `&amp;` is semantically identical, and substituting it leaves
+/// every score, LoC count and finding unchanged. But an unexplained "scores are
+/// approximate" warning on 18 files undermines confidence in a gate, so it is worth
+/// removing the false alarm rather than documenting it.
+///
+/// Only ampersands inside error nodes are touched, and the result is adopted only if
+/// it genuinely parses better. Line numbers are preserved, since no newline is added.
+fn repair_jsx_ampersands(source: &[u8], root: &Node) -> Option<Vec<u8>> {
+    let mut offsets: Vec<usize> = Vec::new();
+    for node in metrics::all_nodes(root) {
+        if node.kind() != "ERROR" {
+            continue;
+        }
+        let start = node.start_byte();
+        let end = node.end_byte().min(source.len());
+        let mut index = start;
+        while index < end {
+            if source[index] != b'&' {
+                index += 1;
+                continue;
+            }
+            // Never touch an operator. When a parse cascades, the ERROR node can span
+            // the whole file, and rewriting `&&` to `&amp;&amp;` would destroy real
+            // logical operators — silently lowering complexity and inflating the score.
+            let previous_byte = if index > 0 { source.get(index - 1) } else { None };
+            let next_byte = source.get(index + 1);
+            let is_operator = next_byte == Some(&b'&')
+                || previous_byte == Some(&b'&')
+                || next_byte == Some(&b'=');
+
+            // Leave anything that already looks like an entity (`&amp;`, `&#39;`).
+            let tail = &source[index + 1..end];
+            let is_entity = tail.first() == Some(&b'#')
+                || tail
+                    .iter()
+                    .position(|b| !b.is_ascii_alphanumeric())
+                    .map(|stop| stop > 0 && tail.get(stop) == Some(&b';'))
+                    .unwrap_or(false);
+
+            if !is_operator && !is_entity {
+                offsets.push(index);
+            }
+            index += 1;
+        }
+    }
+    // ERROR nodes nest, so the same byte can be collected more than once and in
+    // tree order rather than byte order. Both would corrupt the rebuild below.
+    offsets.sort_unstable();
+    offsets.dedup();
+
+    if offsets.is_empty() {
+        return None;
+    }
+
+    let mut repaired = Vec::with_capacity(source.len() + offsets.len() * 4);
+    let mut previous = 0;
+    for offset in offsets {
+        repaired.extend_from_slice(&source[previous..offset]);
+        repaired.extend_from_slice(b"&amp;");
+        previous = offset + 1;
+    }
+    repaired.extend_from_slice(&source[previous..]);
+    Some(repaired)
+}
+
 /// Score one already-loaded source file.
 pub fn analyze_source(
     path: &str,
@@ -65,11 +138,40 @@ pub fn analyze_source(
         );
     };
 
-    let root = tree.root_node();
-    let ctx = FileContext::build(path.to_string(), spec, profile, root, source);
+    let mut errors = count_syntax_errors(&tree.root_node());
+    let mut owned_source: Option<Vec<u8>> = None;
+    let mut active = tree;
+
+    // Iterate: one pass only reveals the ampersands inside the *current* error nodes,
+    // and a line with several of them recovers one at a time. Bounded so a pathological
+    // file cannot loop, and each round must strictly reduce the error count.
+    const MAX_REPAIR_ROUNDS: usize = 8;
+    for _ in 0..MAX_REPAIR_ROUNDS {
+        if errors == 0 {
+            break;
+        }
+        let current = owned_source.as_deref().unwrap_or(source);
+        let Some(repaired) = repair_jsx_ampersands(current, &active.root_node()) else {
+            break;
+        };
+        let Some(retry) = parser.parse(&repaired, None) else {
+            break;
+        };
+        let retry_errors = count_syntax_errors(&retry.root_node());
+        if retry_errors >= errors {
+            break;
+        }
+        errors = retry_errors;
+        active = retry;
+        owned_source = Some(repaired);
+    }
+
+    let effective = owned_source.as_deref().unwrap_or(source);
+    let root = active.root_node();
+    let ctx = FileContext::build(path.to_string(), spec, profile, root, effective);
     let raw = detectors::detect(&ctx);
     let mut report = scoring::score_file(&ctx, raw);
-    report.syntax_errors = count_syntax_errors(&root);
+    report.syntax_errors = errors;
     report
 }
 
