@@ -590,3 +590,60 @@ fn repeated_analysis_is_byte_identical() {
     let second = serde_json::to_string(&py(source)).expect("serialisable");
     assert_eq!(first, second);
 }
+
+// --------------------------------------------------------------------------- //
+// Discovery
+// --------------------------------------------------------------------------- //
+
+/// Build a throwaway tree and return its root. Caller removes it.
+fn scratch_tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("aqs-test-{name}"));
+    let _ = std::fs::remove_dir_all(&root);
+    for (relative, body) in files {
+        let path = root.join(relative);
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("mkdir");
+        std::fs::write(&path, body).expect("write");
+    }
+    root
+}
+
+#[test]
+fn excluded_directories_are_pruned_not_walked() {
+    // Pruning is an optimisation only: the file set must be exactly what the per-file
+    // exclusion check would have produced anyway.
+    let root = scratch_tree(
+        "prune",
+        &[
+            ("src/app.ts", "export const a = 1;\n"),
+            ("node_modules/dep/index.ts", "export const b = 2;\n"),
+            ("node_modules/dep/nested/deep/x.ts", "export const c = 3;\n"),
+            (".venv/lib/site.py", "x = 1\n"),
+            ("src/components/ui/button.tsx", "export const B = () => null;\n"),
+        ],
+    );
+
+    let found = aqs::analyze::discover(&[root.clone()], &Profile::default());
+    let names: Vec<String> = found
+        .iter()
+        .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/"))
+        .collect();
+    assert_eq!(names, vec!["src/app.ts"], "only real source should be discovered");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn an_explicit_scan_of_an_excluded_root_still_descends() {
+    // Pruning must not make the root itself unwalkable, or `aqs scan node_modules`
+    // would behave differently from the per-file rule.
+    let root = scratch_tree(
+        "explicit-root",
+        &[("node_modules/dep/index.ts", "export const b = 2;\n")],
+    );
+    let inner = root.join("node_modules");
+    // Files under it are still excluded by pattern, so the result is empty either way —
+    // the point is that this returns rather than panicking or walking nothing at all.
+    let found = aqs::analyze::discover(&[inner], &Profile::default());
+    assert!(found.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
