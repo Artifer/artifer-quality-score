@@ -658,7 +658,10 @@ fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         }
         let methods: Vec<&FunctionContext> = class_methods(&class_node, ctx)
             .into_iter()
-            .filter(|f| !f.is_constructor)
+            .filter(|f| {
+                !f.is_constructor
+                    && !metrics::is_super_delegation(&f.node, ctx.spec, ctx.source)
+            })
             .collect();
         if methods.len() < 2 {
             continue;

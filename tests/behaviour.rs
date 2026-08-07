@@ -342,6 +342,64 @@ fn interfaces_are_exempt_from_cohesion() {
 }
 
 #[test]
+fn super_only_overrides_are_exempt_from_cohesion() {
+    // A DRF/Django view whose extra methods exist purely to hang a decorator on and
+    // forward to super(). They hold no state by design, so counting each as its own
+    // responsibility condemns a perfectly ordinary class.
+    let report = py(
+        "class MyProfileView(generics.RetrieveUpdateAPIView):\n\
+         \x20   def get_object(self):\n\
+         \x20       return Profile.objects.get(user=self.request.user)\n\
+         \x20   def perform_update(self, serializer):\n\
+         \x20       log(user=self.request.user)\n\
+         \x20   @extend_schema(summary='Get')\n\
+         \x20   def get(self, request, *args, **kwargs):\n\
+         \x20       return super().get(request, *args, **kwargs)\n\
+         \x20   @extend_schema(summary='Put')\n\
+         \x20   def put(self, request, *args, **kwargs):\n\
+         \x20       return super().put(request, *args, **kwargs)\n\
+         \x20   @extend_schema(summary='Patch')\n\
+         \x20   def patch(self, request, *args, **kwargs):\n\
+         \x20       return super().patch(request, *args, **kwargs)\n",
+    );
+    assert!(
+        !categories(&report).contains(prof::LOW_COHESION),
+        "super()-only overrides should not count as responsibilities: {:?}",
+        report.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_method_that_does_more_than_delegate_still_counts() {
+    // The exemption must be narrow: real logic alongside the super() call counts.
+    let report = py(
+        "class C(Base):\n\
+         \x20   def a(self):\n\
+         \x20       return self.thing\n\
+         \x20   def b(self, request):\n\
+         \x20       audit(request)\n\
+         \x20       return super().b(request)\n",
+    );
+    assert!(categories(&report).contains(prof::LOW_COHESION));
+}
+
+#[test]
+fn django_app_tests_py_is_recognised_as_a_test_file() {
+    // `manage.py startapp` puts an app's tests in a single `app/tests.py`.
+    let methods: String = (0..4)
+        .map(|i| format!("    def test_{i}(self):\n        assert thing_{i}() == {i}\n"))
+        .collect();
+    let source = format!("class TestVacancy:\n{methods}");
+    for path in ["tests.py", "vacancies/tests.py"] {
+        let report = score(&source, path, "python");
+        assert!(
+            !categories(&report).contains(prof::LOW_COHESION),
+            "{path} should be treated as a test file"
+        );
+    }
+}
+
+#[test]
 fn test_classes_are_exempt_from_cohesion() {
     // Independent test methods are the goal, not a cohesion failure.
     let methods: String = (0..6)

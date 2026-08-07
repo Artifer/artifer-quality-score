@@ -431,6 +431,35 @@ fn has_stub_body(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     true
 }
 
+/// Whether a method's whole body just forwards to the superclass.
+///
+/// `def get(self, *a, **kw): return super().get(*a, **kw)` exists to hang a decorator
+/// on — an `@extend_schema` for API docs, a permission marker — not to hold state. It
+/// has no fields and calls no siblings by design, so cohesion metrics count each one
+/// as its own responsibility and condemn otherwise-fine classes. Excluded for the same
+/// reason constructors and abstract stubs are.
+pub fn is_super_delegation(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
+    let Some(body) = function_body(node, spec) else {
+        return false;
+    };
+    let mut meaningful = 0;
+    for statement in named_children(&body) {
+        if is_comment(&statement) || is_docstring(&statement) {
+            continue;
+        }
+        let text_body = text(&statement, source).trim();
+        let forwards = text_body.starts_with("return super()")
+            || text_body.starts_with("super()")
+            || text_body.starts_with("return super.")
+            || text_body.starts_with("super.");
+        if !forwards {
+            return false;
+        }
+        meaningful += 1;
+    }
+    meaningful > 0
+}
+
 /// Whether a class is an interface — abstract, Protocol, or all-stubs.
 ///
 /// Interfaces have no shared state and no internal calls by definition, so cohesion

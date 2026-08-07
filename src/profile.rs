@@ -161,6 +161,10 @@ const TEST_PATTERNS: &[&str] = &[
     "*_test.py",
     "*/tests/*",
     "tests/*",
+    // Django's `manage.py startapp` layout puts an app's tests in a single
+    // `app/tests.py`, which none of the patterns above match.
+    "tests.py",
+    "*/tests.py",
     "*/conftest.py",
     "conftest.py",
     "*.test.ts",
