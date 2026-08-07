@@ -1,0 +1,113 @@
+# Build and publish release binaries when a version tag is pushed.
+#
+#   git tag v0.3.1 && git push --tags
+#
+# Produces a universal macOS binary (arm64 + x86_64 via lipo) and Linux x86_64, each
+# as a tarball containing a single `aqs` executable, plus SHA256SUMS.
+#
+# Linux arm64 is not built here: GitHub's arm64 runners are billed for private
+# repositories, and no one on the team needs it yet. Add `ubuntu-24.04-arm` to the
+# matrix if that changes.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos-universal
+          - os: ubuntu-latest
+            label: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --no-self-update
+
+      - name: Add macOS targets
+        if: matrix.label == 'macos-universal'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Add Linux target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-${{ matrix.label }}-${{ hashFiles('Cargo.lock') }}
+
+      # The grammars are compiled C, so each target needs its own build; lipo then
+      # fuses the two macOS slices into one binary that runs on any Mac.
+      - name: Build (macOS universal)
+        if: matrix.label == 'macos-universal'
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+          mkdir -p dist
+          lipo -create -output dist/aqs \
+            target/aarch64-apple-darwin/release/aqs \
+            target/x86_64-apple-darwin/release/aqs
+          strip dist/aqs
+
+      - name: Build (Linux)
+        if: matrix.target != ''
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/aqs dist/aqs
+          strip dist/aqs
+
+      - name: Verify the binary runs
+        run: ./dist/aqs --version
+
+      - name: Package
+        run: |
+          tar -czf "aqs-${GITHUB_REF_NAME}-${{ matrix.label }}.tar.gz" -C dist aqs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aqs-${{ matrix.label }}
+          path: aqs-*.tar.gz
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Checksums
+        run: sha256sum aqs-*.tar.gz > SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            aqs-*.tar.gz SHA256SUMS \
+          || gh release upload "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber \
+            aqs-*.tar.gz SHA256SUMS

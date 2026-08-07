@@ -31,10 +31,58 @@ Built for two jobs:
 
 ## Install
 
+### From a release (no Rust toolchain needed)
+
+The repository is private, so installation authenticates with `gh` rather than a bare
+`curl` — every Artifer developer already has it logged in, and the alternative is
+minting and handing round access tokens.
+
+```bash
+gh auth login                                    # once, if you haven't
+curl -fsSL -H "Authorization: token $(gh auth token)" \
+  https://raw.githubusercontent.com/Artifer/artifer-quality-score/master/install.sh \
+  | bash
+```
+
+Or clone and run it, which is easier to read before executing:
+
+```bash
+git clone https://github.com/Artifer/artifer-quality-score.git
+cd artifer-quality-score && ./install.sh
+```
+
+Installs to `~/.local/bin` by default; set `PREFIX=/usr/local/bin` to change that, and
+pass a tag (`./install.sh v0.3.0`) to pin a version. macOS binaries are universal, so
+one download covers both Apple Silicon and Intel.
+
+Manual download, if you would rather not run a script:
+
+```bash
+gh release download --repo Artifer/artifer-quality-score \
+  --pattern '*macos-universal.tar.gz'
+tar -xzf aqs-*.tar.gz && install -m 755 aqs ~/.local/bin/aqs
+```
+
+### From source
+
 ```bash
 cargo build --release          # binary at target/release/aqs
 cargo install --path .         # or put it on your PATH
 ```
+
+### Cutting a new release
+
+Bump `version` in `Cargo.toml`, then push a tag. `.github/workflows/release.yml`
+builds macOS (universal) and Linux x86_64, verifies each binary runs, and publishes
+the tarballs with checksums.
+
+```bash
+git tag v0.3.1 && git push --tags
+```
+
+Remember that a version bump invalidates every cached score, deliberately — the tool
+version is part of the cache key so that a scoring change cannot be served from a
+stale cache. Bump it whenever analysis behaviour changes, not only for releases.
 
 ## Usage
 
