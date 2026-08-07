@@ -33,13 +33,23 @@ Built for two jobs:
 
 ### From a release (no Rust toolchain needed)
 
-The repository is private, so installation authenticates with `gh` rather than a bare
-`curl` — every Artifer developer already has it logged in, and the alternative is
-minting and handing round access tokens.
+**The repository is private, so every download needs credentials.** GitHub does not
+serve release assets of a private repository anonymously, so there is no token-free
+`curl | sh`. See [Going public](#going-public) if you want one.
+
+Curl one-liner (needs `gh` only to mint the token — the script itself uses plain curl):
 
 ```bash
-gh auth login                                    # once, if you haven't
-curl -fsSL -H "Authorization: token $(gh auth token)" \
+GH_TOKEN="$(gh auth token)" bash -c 'curl -fsSL \
+  -H "Authorization: Bearer $GH_TOKEN" \
+  https://raw.githubusercontent.com/Artifer/artifer-quality-score/master/install.sh \
+  | GH_TOKEN="$GH_TOKEN" bash'
+```
+
+In CI, where a token is already in the environment, it collapses to:
+
+```bash
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
   https://raw.githubusercontent.com/Artifer/artifer-quality-score/master/install.sh \
   | bash
 ```
@@ -51,16 +61,38 @@ git clone https://github.com/Artifer/artifer-quality-score.git
 cd artifer-quality-score && ./install.sh
 ```
 
-Installs to `~/.local/bin` by default; set `PREFIX=/usr/local/bin` to change that, and
-pass a tag (`./install.sh v0.3.0`) to pin a version. macOS binaries are universal, so
-one download covers both Apple Silicon and Intel.
+`install.sh` needs **either** `GH_TOKEN`/`GITHUB_TOKEN` — in which case it uses nothing
+but `curl` and `tar`, so it works in a slim CI container — **or** an authenticated
+`gh`, which every developer here already has. It installs to `~/.local/bin` by default
+(`PREFIX=/usr/local/bin` to change that) and takes an optional tag to pin a version:
 
-Manual download, if you would rather not run a script:
+```bash
+./install.sh v0.3.0
+```
+
+macOS binaries are universal, so one download covers Apple Silicon and Intel.
+
+Manual download, if you would rather not pipe a script into a shell:
 
 ```bash
 gh release download --repo Artifer/artifer-quality-score \
   --pattern '*macos-universal.tar.gz'
 tar -xzf aqs-*.tar.gz && install -m 755 aqs ~/.local/bin/aqs
+```
+
+### Going public
+
+A token-free `curl | sh` requires the repository to be public. Two things to settle
+before flipping it:
+
+- **The git history names client codebases and assesses their quality** — commit
+  messages reference `jl-interim-app-backend`, `artifer-analytics-lib` and specific
+  complexity figures. Read them first; you may want to rewrite them.
+- Publishing also removes the private-repo token dance from every consuming CI
+  pipeline, which is the main practical argument in favour.
+
+```bash
+gh repo edit Artifer/artifer-quality-score --visibility public
 ```
 
 ### From source
