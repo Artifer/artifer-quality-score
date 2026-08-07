@@ -200,6 +200,12 @@ const EXCLUDE_PATTERNS: &[&str] = &[
     // their near-identical thin wrappers are that library's intended design, not
     // duplication anyone should "fix".
     "*/components/ui/*",
+    // `reference/` holds source material and one-off exploration scripts, not shipped
+    // code. Across the Artifer repos it is overwhelmingly PDFs, spreadsheets and
+    // exported decks; where it does contain code it is scratch work. Leaving it in let
+    // a single 1,717-line reference script define a whole library's score.
+    "reference/*",
+    "*/reference/*",
 ];
 
 /// Validated against real test suites: every one of these fires on idiomatic,
@@ -399,7 +405,12 @@ mod tests {
         assert!(profile.is_excluded("node_modules/react/index.js"));
         assert!(profile.is_excluded("src/components/ui/button.tsx"));
         assert!(profile.is_excluded("src/types/api.d.ts"));
+        assert!(profile.is_excluded("reference/generate_deck.py"));
+        assert!(profile.is_excluded("tools/lib/reference/analysis_catalogue.py"));
         assert!(!profile.is_excluded("src/components/TenderTable.tsx"));
+        // Only the directory is excluded — a file merely named for it is still scored.
+        assert!(!profile.is_excluded("src/reference_data.py"));
+        assert!(!profile.is_excluded("src/lib/references/model.py"));
     }
 
     #[test]
