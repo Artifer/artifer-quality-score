@@ -225,17 +225,22 @@ Run `aqs explain --thresholds` for the full list of threshold names.
 Measured on a 258,955 LoC mixed Python/TS corpus, 12-core M-series, all cores,
 end-to-end through the CLI including JSON output.
 
-| | Time | Throughput | 100k LoC |
-| --- | --- | --- | --- |
-| `scan`, 258,955 LoC | 0.66s | 392,102 LoC/s | 0.26s |
-| `check`, single file | 14ms | — | — |
-| `explain` (startup only) | 2ms | — | — |
+| | Time | Throughput |
+| --- | --- | --- |
+| `scan`, 258,955 LoC | 0.76s | 342,694 LoC/s |
+| `scan`, frontend repo with `node_modules` | 21ms | — |
+| `check`, single file | 2.6ms | — |
+| `explain` (startup only) | 2.2ms | — |
 
-The 2ms floor is the point of shipping a binary: a loop that scores a file after each
+The ~2ms floor is the point of shipping a binary: a loop that scores a file after each
 edit pays no interpreter or import cost at all. For reference, the Python
 implementation this replaced measured 3.4x slower in bulk (116,747 LoC/s) and 12-14x
-slower on small inputs, where its ~122ms of interpreter startup dominated everything
-else.
+slower on small inputs, where its ~122ms of interpreter startup dominated everything.
+
+Excluded directories are pruned during traversal rather than filtered file by file,
+which matters more than it sounds: one real frontend checkout held 39,833 files under
+`node_modules` against 78 files of source, and filtering leaves cost 630ms of the
+650ms scan.
 
 Full two-sided merge gate on the same corpus — it scores every file in two trees, so
 this is the expensive case:
@@ -332,6 +337,13 @@ Be aware of these before treating the score as a target:
   `test_patterns` gets production rules applied to it.
 - **Primitive Obsession and String Heavy Arguments are weaker in untyped code**,
   by design — see above.
+- **One known grammar gap.** `f<typeof import("./m")>()` — an import type inside type
+  arguments — is rejected by tree-sitter-typescript 0.23.2, the newest published
+  crate. It surfaced in 3 files across 25 real repositories, all `vi.mock` calls in
+  tests. The error is localised and verified inert: substituting an equivalent type
+  argument leaves the score, LoC and finding set unchanged. Files affected report a
+  non-zero `syntax_errors` count so you can tell.
+
 - **The weights are hand-tuned, not empirically calibrated.** They were adjusted
   against the Artifer codebases so that clean code lands at 10.0 and genuinely
   problematic files land in the 3-5 range. They are a considered starting point,
