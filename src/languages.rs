@@ -44,6 +44,11 @@ pub struct LanguageSpec {
     /// Node kinds that *are* an implicit receiver. Rust models `&self` as its own
     /// `self_parameter` node rather than a parameter whose text happens to be "self".
     pub implicit_param_nodes: HashSet<&'static str>,
+    /// Whether a method must name its receiver. Python and Rust do, so a function
+    /// without one is an associated/static function and holds no instance state —
+    /// which LCOM4 must not count as a responsibility. TS and JS leave `this`
+    /// implicit, so absence proves nothing there.
+    pub explicit_receiver: bool,
 
     /// Type names treated as primitives for Primitive Obsession.
     pub primitive_types: HashSet<&'static str>,
@@ -112,6 +117,7 @@ fn python_spec() -> LanguageSpec {
         param_containers: set(&["parameters", "lambda_parameters"]),
         implicit_params: set(&["self", "cls", "mcs", "metacls"]),
         implicit_param_nodes: HashSet::new(),
+        explicit_receiver: true,
         primitive_types: set(&[
             "str", "int", "float", "bool", "bytes", "complex", "bytearray",
         ]),
@@ -177,6 +183,7 @@ fn typescript_like(
         param_containers: set(&["formal_parameters"]),
         implicit_params: set(&["this"]),
         implicit_param_nodes: HashSet::new(),
+        explicit_receiver: false,
         primitive_types: set(&["string", "number", "boolean", "bigint", "symbol"]),
         string_types: set(&["string"]),
         type_annotation_nodes: set(&["type_annotation"]),
@@ -228,6 +235,7 @@ fn rust_spec() -> LanguageSpec {
         param_containers: set(&["parameters", "closure_parameters"]),
         implicit_params: set(&["self", "&self", "&mut self", "mut self"]),
         implicit_param_nodes: set(&["self_parameter"]),
+        explicit_receiver: true,
         primitive_types: set(&[
             "i8", "i16", "i32", "i64", "i128", "isize",
             "u8", "u16", "u32", "u64", "u128", "usize",

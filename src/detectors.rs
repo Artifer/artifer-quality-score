@@ -55,7 +55,7 @@ pub struct FileContext<'tree, 'src> {
 }
 
 impl<'tree, 'src> FileContext<'tree, 'src> {
-    pub fn build(
+    pub fn new(
         path: String,
         spec: &'static LanguageSpec,
         profile: &'src Profile,
@@ -201,39 +201,22 @@ fn complex_conditional(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<Raw
     }
 }
 
-fn excess_arguments(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
-    // Constructors are covered by Constructor Over-Injection; charging both would
-    // double-count the same signature.
-    if f.is_constructor {
-        return;
-    }
-    let threshold = ctx.threshold("function_max_arguments");
+/// Both argument-count rules: same measurement, different threshold and audience.
+///
+/// Constructors are charged under Constructor Over-Injection and ordinary functions
+/// under Excess Number of Function Arguments, never both — charging twice would
+/// double-count one signature.
+fn argument_count(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
+    let (category, threshold_key) = if f.is_constructor {
+        (prof::CONSTRUCTOR_OVER_INJECTION, "constructor_max_arguments")
+    } else {
+        (prof::EXCESS_ARGUMENTS, "function_max_arguments")
+    };
+    let threshold = ctx.threshold(threshold_key);
     let count = f.parameters.len();
     if (count as f64) > threshold {
         out.push(RawFinding {
-            category: prof::EXCESS_ARGUMENTS,
-            details: format!("Arguments = {count}"),
-            range: signature_range(f),
-            value: count as f64,
-            threshold,
-            function: Some(f.name.clone()),
-        });
-    }
-}
-
-fn constructor_over_injection(
-    f: &FunctionContext,
-    ctx: &FileContext,
-    out: &mut Vec<RawFinding>,
-) {
-    if !f.is_constructor {
-        return;
-    }
-    let threshold = ctx.threshold("constructor_max_arguments");
-    let count = f.parameters.len();
-    if (count as f64) > threshold {
-        out.push(RawFinding {
-            category: prof::CONSTRUCTOR_OVER_INJECTION,
+            category,
             details: format!("Arguments = {count}"),
             range: signature_range(f),
             value: count as f64,
@@ -253,10 +236,10 @@ fn brain_method(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding
     let loc_threshold = ctx.threshold("brain_method_lines_of_code");
     let cc_threshold = ctx.threshold("brain_method_cyclomatic_complexity");
     let nesting_threshold = ctx.threshold("brain_method_nesting_depth");
-    if (f.loc as f64) > loc_threshold
+    let is_brain = (f.loc as f64) > loc_threshold
         && (f.complexity as f64) > cc_threshold
-        && (f.nesting as f64) > nesting_threshold
-    {
+        && (f.nesting as f64) > nesting_threshold;
+    if is_brain {
         out.push(RawFinding {
             category: prof::BRAIN_METHOD,
             details: format!(
@@ -447,16 +430,14 @@ fn large_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     }
 }
 
-/// The same assertion block copy-pasted across a test suite.
-fn duplicated_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFinding>) {
-    if !ctx.is_test {
-        return;
-    }
-    let min_statements = ctx.threshold("duplicated_assertion_block_min_statements") as usize;
-    // Insertion-ordered grouping, matching the reference implementation's dict.
+/// Group assertion runs by their normalised token signature, insertion-ordered.
+#[allow(clippy::type_complexity)]
+fn group_assertion_runs<'tree>(
+    ctx: &FileContext<'tree, '_>,
+    min_statements: usize,
+) -> (Vec<Vec<&'static str>>, HashMap<Vec<&'static str>, Vec<Node<'tree>>>) {
     let mut order: Vec<Vec<&'static str>> = Vec::new();
-    let mut groups: HashMap<Vec<&'static str>, Vec<Node>> = HashMap::new();
-
+    let mut groups: HashMap<Vec<&'static str>, Vec<Node<'tree>>> = HashMap::new();
     for run in assertion_runs(ctx) {
         if run.len() < min_statements {
             continue;
@@ -471,6 +452,16 @@ fn duplicated_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         }
         entry.or_default().push(run[0]);
     }
+    (order, groups)
+}
+
+/// The same assertion block copy-pasted across a test suite.
+fn duplicated_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFinding>) {
+    if !ctx.is_test {
+        return;
+    }
+    let min_statements = ctx.threshold("duplicated_assertion_block_min_statements") as usize;
+    let (order, groups) = group_assertion_runs(ctx, min_statements);
 
     for signature in order {
         let occurrences = &groups[&signature];
@@ -600,10 +591,9 @@ fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
                 && (f.complexity as f64) > brain_cc
                 && (f.nesting as f64) > brain_nesting
         });
-        if (loc as f64) > loc_threshold
-            && (methods.len() as f64) > fn_threshold
-            && has_brain_method
-        {
+        let is_brain_class =
+            (loc as f64) > loc_threshold && (methods.len() as f64) > fn_threshold;
+        if is_brain_class && has_brain_method {
             let name = metrics::class_name(&class_node, ctx.source)
                 .unwrap_or_else(|| "<anonymous class>".to_string());
             out.push(RawFinding {
@@ -648,11 +638,72 @@ fn self_attributes(f: &FunctionContext, ctx: &FileContext) -> HashSet<String> {
     fields
 }
 
-/// LCOM4: how many unrelated responsibilities a class actually holds.
+/// Disjoint-set over method names, for counting connected components.
+struct Components {
+    parent: HashMap<String, String>,
+}
+
+impl Components {
+    fn new(names: impl IntoIterator<Item = String>) -> Self {
+        let parent = names.into_iter().map(|n| (n.clone(), n)).collect();
+        Self { parent }
+    }
+
+    fn find(&mut self, name: &str) -> String {
+        let mut current = name.to_string();
+        loop {
+            let next = self.parent[&current].clone();
+            if next == current {
+                return current;
+            }
+            let grandparent = self.parent[&next].clone();
+            self.parent.insert(current, grandparent);
+            current = next;
+        }
+    }
+
+    fn union(&mut self, left: &str, right: &str) {
+        let (left_root, right_root) = (self.find(left), self.find(right));
+        if left_root != right_root {
+            self.parent.insert(right_root, left_root);
+        }
+    }
+
+    fn count<'a>(&mut self, names: impl IntoIterator<Item = &'a str>) -> usize {
+        let roots: HashSet<String> = names.into_iter().map(|n| self.find(n)).collect();
+        roots.len()
+    }
+}
+
+/// LCOM4 for one class: methods are connected when they share an instance field or one
+/// calls the other, and the metric is the number of connected components.
+fn lcom4(methods: &[&FunctionContext], ctx: &FileContext) -> usize {
+    let fields: HashMap<&str, HashSet<String>> = methods
+        .iter()
+        .map(|f| (f.name.as_str(), self_attributes(f, ctx)))
+        .collect();
+    let names: HashSet<&str> = methods.iter().map(|f| f.name.as_str()).collect();
+    let mut components = Components::new(methods.iter().map(|f| f.name.clone()));
+
+    for (index, f) in methods.iter().enumerate() {
+        // Shared instance state connects two methods.
+        for other in methods.iter().skip(index + 1) {
+            if !fields[f.name.as_str()].is_disjoint(&fields[other.name.as_str()]) {
+                components.union(&f.name, &other.name);
+            }
+        }
+        // So does one calling the other.
+        for called in fields[f.name.as_str()].iter().filter(|n| names.contains(n.as_str())) {
+            components.union(&f.name, called);
+        }
+    }
+    components.count(methods.iter().map(|f| f.name.as_str()))
+}
+
+/// A class whose methods form several unrelated groups.
 ///
-/// Methods are connected when they share an instance field or one calls the other;
-/// the metric is the number of connected components. Constructors are excluded, since
-/// they touch every field and would make any class look perfectly cohesive.
+/// Constructors touch every field and pure accessors touch exactly one, so neither says
+/// anything about how the class is divided; both are excluded, as are interfaces.
 fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     let threshold = ctx.threshold("class_max_lcom4");
 
@@ -663,7 +714,13 @@ fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         let methods: Vec<&FunctionContext> = class_methods(&class_node, ctx)
             .into_iter()
             .filter(|f| {
-                !f.is_constructor
+                // Constructors touch every field, accessors touch exactly one, and an
+                // associated function touches no instance at all — none of the three
+                // says anything about how the class is divided.
+                let is_instance_method = !ctx.spec.explicit_receiver
+                    || metrics::has_receiver(&f.node, ctx.spec, ctx.source);
+                is_instance_method
+                    && !f.is_constructor
                     && !metrics::is_pure_accessor(&f.node, ctx.spec, ctx.source)
             })
             .collect();
@@ -671,70 +728,24 @@ fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
             continue;
         }
 
-        let mut fields: HashMap<String, HashSet<String>> = HashMap::new();
-        let mut parent: HashMap<String, String> = HashMap::new();
-        for f in &methods {
-            fields.insert(f.name.clone(), self_attributes(f, ctx));
-            parent.insert(f.name.clone(), f.name.clone());
+        let components = lcom4(&methods, ctx);
+        if (components as f64) <= threshold {
+            continue;
         }
-        let names: HashSet<String> = methods.iter().map(|f| f.name.clone()).collect();
-
-        fn find(parent: &mut HashMap<String, String>, name: &str) -> String {
-            let mut current = name.to_string();
-            loop {
-                let next = parent[&current].clone();
-                if next == current {
-                    return current;
-                }
-                let grandparent = parent[&next].clone();
-                parent.insert(current.clone(), grandparent);
-                current = next;
-            }
-        }
-
-        fn union(parent: &mut HashMap<String, String>, left: &str, right: &str) {
-            let left_root = find(parent, left);
-            let right_root = find(parent, right);
-            if left_root != right_root {
-                parent.insert(right_root, left_root);
-            }
-        }
-
-        for (index, f) in methods.iter().enumerate() {
-            // Shared instance state connects two methods.
-            for other in methods.iter().skip(index + 1) {
-                let shared = fields[&f.name].intersection(&fields[&other.name]).count() > 0;
-                if shared {
-                    union(&mut parent, &f.name, &other.name);
-                }
-            }
-            // So does one calling the other.
-            let called: Vec<String> =
-                fields[&f.name].intersection(&names).cloned().collect();
-            for target in called {
-                union(&mut parent, &f.name, &target);
-            }
-        }
-
-        let roots: HashSet<String> =
-            methods.iter().map(|f| find(&mut parent, &f.name)).collect();
-        let components = roots.len();
-        if (components as f64) > threshold {
-            let name = metrics::class_name(&class_node, ctx.source)
-                .unwrap_or_else(|| "<anonymous class>".to_string());
-            out.push(RawFinding {
-                category: prof::LOW_COHESION,
-                details: format!(
-                    "LCOM4 = {} unrelated responsibilities across {} functions",
-                    components,
-                    methods.len()
-                ),
-                range: Range::line(class_node.start_position().row + 1),
-                value: components as f64,
-                threshold,
-                function: Some(name),
-            });
-        }
+        let name = metrics::class_name(&class_node, ctx.source)
+            .unwrap_or_else(|| "<anonymous class>".to_string());
+        out.push(RawFinding {
+            category: prof::LOW_COHESION,
+            details: format!(
+                "LCOM4 = {} unrelated responsibilities across {} functions",
+                components,
+                methods.len()
+            ),
+            range: Range::line(class_node.start_position().row + 1),
+            value: components as f64,
+            threshold,
+            function: Some(name),
+        });
     }
 }
 
@@ -761,8 +772,7 @@ pub fn detect(ctx: &FileContext) -> Vec<RawFinding> {
         deep_nested_complexity(function, ctx, &mut findings);
         bumpy_road(function, ctx, &mut findings);
         complex_conditional(function, ctx, &mut findings);
-        excess_arguments(function, ctx, &mut findings);
-        constructor_over_injection(function, ctx, &mut findings);
+        argument_count(function, ctx, &mut findings);
         brain_method(function, ctx, &mut findings);
         string_heavy_arguments(function, ctx, &mut findings);
         primitive_obsession(function, ctx, &mut findings);

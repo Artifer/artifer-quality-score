@@ -28,6 +28,14 @@ pub struct SequenceMatcher<'a> {
     b2j: HashMap<&'a str, Vec<usize>>,
 }
 
+/// The search window in both sequences. Four bare indices at every call site is
+/// exactly the argument swap Primitive Obsession warns about.
+#[derive(Debug, Clone)]
+struct Window {
+    a: std::ops::Range<usize>,
+    b: std::ops::Range<usize>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Match {
     a_start: usize,
@@ -53,77 +61,91 @@ impl<'a> SequenceMatcher<'a> {
         Self { a, b, b2j }
     }
 
-    fn find_longest_match(
+    /// One row of the dynamic-programming scan: match lengths ending at each `j`.
+    fn scan_row(
         &self,
-        alo: usize,
-        ahi: usize,
-        blo: usize,
-        bhi: usize,
-    ) -> Match {
-        let (mut besti, mut bestj, mut bestsize) = (alo, blo, 0usize);
-        let mut j2len: HashMap<usize, usize> = HashMap::new();
-
-        for i in alo..ahi {
-            let mut newj2len: HashMap<usize, usize> = HashMap::new();
-            if let Some(indices) = self.b2j.get(self.a[i]) {
-                for &j in indices {
-                    if j < blo {
-                        continue;
-                    }
-                    if j >= bhi {
-                        break;
-                    }
-                    let previous =
-                        if j == 0 { 0 } else { j2len.get(&(j - 1)).copied().unwrap_or(0) };
-                    let k = previous + 1;
-                    newj2len.insert(j, k);
-                    if k > bestsize {
-                        besti = i + 1 - k;
-                        bestj = j + 1 - k;
-                        bestsize = k;
-                    }
-                }
+        i: usize,
+        previous: &HashMap<usize, usize>,
+        b_range: &std::ops::Range<usize>,
+        best: &mut Match,
+    ) -> HashMap<usize, usize> {
+        let mut row: HashMap<usize, usize> = HashMap::new();
+        let Some(indices) = self.b2j.get(self.a[i]) else {
+            return row;
+        };
+        for &j in indices {
+            if j < b_range.start {
+                continue;
             }
-            j2len = newj2len;
+            if j >= b_range.end {
+                break;
+            }
+            let earlier = if j == 0 { 0 } else { previous.get(&(j - 1)).copied().unwrap_or(0) };
+            let length = earlier + 1;
+            row.insert(j, length);
+            if length > best.size {
+                *best = Match { a_start: i + 1 - length, b_start: j + 1 - length, size: length };
+            }
         }
+        row
+    }
 
-        // Extend the match with equal elements on either side. With no junk set,
-        // these are the only extension loops that apply.
-        while besti > alo && bestj > blo && self.a[besti - 1] == self.b[bestj - 1] {
-            besti -= 1;
-            bestj -= 1;
-            bestsize += 1;
+    fn find_longest_match(&self, window: Window) -> Match {
+        let mut best = Match { a_start: window.a.start, b_start: window.b.start, size: 0 };
+        let mut previous: HashMap<usize, usize> = HashMap::new();
+        for i in window.a.clone() {
+            previous = self.scan_row(i, &previous, &window.b, &mut best);
         }
-        while besti + bestsize < ahi
-            && bestj + bestsize < bhi
-            && self.a[besti + bestsize] == self.b[bestj + bestsize]
-        {
-            bestsize += 1;
-        }
+        // Extend the match with equal elements on either side. With no junk set, these
+        // are the only extension loops CPython applies.
+        self.extend(best, window)
+    }
 
-        Match { a_start: besti, b_start: bestj, size: bestsize }
+    /// Grow a match outwards while the elements on either side are equal.
+    fn extend(&self, found: Match, window: Window) -> Match {
+        let (alo, ahi) = (window.a.start, window.a.end);
+        let (blo, bhi) = (window.b.start, window.b.end);
+        let Match { mut a_start, mut b_start, mut size } = found;
+        while self.matches_before(a_start, b_start, alo, blo) {
+            a_start -= 1;
+            b_start -= 1;
+            size += 1;
+        }
+        while self.matches_after(a_start + size, b_start + size, ahi, bhi) {
+            size += 1;
+        }
+        Match { a_start, b_start, size }
+    }
+
+    /// Whether the elements immediately before both positions are equal.
+    fn matches_before(&self, a_at: usize, b_at: usize, alo: usize, blo: usize) -> bool {
+        a_at > alo && b_at > blo && self.a[a_at - 1] == self.b[b_at - 1]
+    }
+
+    /// Whether the elements at both positions are equal and in bounds.
+    fn matches_after(&self, a_at: usize, b_at: usize, ahi: usize, bhi: usize) -> bool {
+        a_at < ahi && b_at < bhi && self.a[a_at] == self.b[b_at]
     }
 
     /// Total number of matched elements across all matching blocks.
     fn total_matches(&self) -> usize {
-        let mut queue = vec![(0usize, self.a.len(), 0usize, self.b.len())];
+        let mut queue = vec![Window { a: 0..self.a.len(), b: 0..self.b.len() }];
         let mut total = 0usize;
-        while let Some((alo, ahi, blo, bhi)) = queue.pop() {
-            let found = self.find_longest_match(alo, ahi, blo, bhi);
+        while let Some(window) = queue.pop() {
+            let found = self.find_longest_match(window.clone());
             if found.size == 0 {
                 continue;
             }
             total += found.size;
-            if alo < found.a_start && blo < found.b_start {
-                queue.push((alo, found.a_start, blo, found.b_start));
+            let (a_end, b_end) = (found.a_start + found.size, found.b_start + found.size);
+            if window.a.start < found.a_start && window.b.start < found.b_start {
+                queue.push(Window {
+                    a: window.a.start..found.a_start,
+                    b: window.b.start..found.b_start,
+                });
             }
-            if found.a_start + found.size < ahi && found.b_start + found.size < bhi {
-                queue.push((
-                    found.a_start + found.size,
-                    ahi,
-                    found.b_start + found.size,
-                    bhi,
-                ));
+            if a_end < window.a.end && b_end < window.b.end {
+                queue.push(Window { a: a_end..window.a.end, b: b_end..window.b.end });
             }
         }
         total

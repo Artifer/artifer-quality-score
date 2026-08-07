@@ -61,44 +61,49 @@ fn count_syntax_errors(root: &Node) -> usize {
 ///
 /// Only ampersands inside error nodes are touched, and the result is adopted only if
 /// it genuinely parses better. Line numbers are preserved, since no newline is added.
-fn repair_jsx_ampersands(source: &[u8], root: &Node) -> Option<Vec<u8>> {
+/// Whether the `&` at `index` is part of an operator (`&&`, `&=`).
+///
+/// When a parse cascades, the ERROR node can span the whole file, and rewriting `&&` to
+/// `&amp;&amp;` would destroy real logical operators — silently lowering complexity and
+/// inflating the score.
+fn is_operator_ampersand(source: &[u8], index: usize) -> bool {
+    let previous = if index > 0 { source.get(index - 1) } else { None };
+    let next = source.get(index + 1);
+    next == Some(&b'&') || previous == Some(&b'&') || next == Some(&b'=')
+}
+
+/// Whether the `&` at `index` already begins an entity (`&amp;`, `&#39;`).
+fn begins_entity(source: &[u8], index: usize, end: usize) -> bool {
+    let tail = &source[index + 1..end];
+    tail.first() == Some(&b'#')
+        || tail
+            .iter()
+            .position(|b| !b.is_ascii_alphanumeric())
+            .is_some_and(|stop| stop > 0 && tail.get(stop) == Some(&b';'))
+}
+
+/// Byte offsets of the bare ampersands inside parser error nodes.
+fn bare_ampersand_offsets(source: &[u8], root: &Node) -> Vec<usize> {
     let mut offsets: Vec<usize> = Vec::new();
     for node in metrics::all_nodes(root) {
         if node.kind() != "ERROR" {
             continue;
         }
-        let start = node.start_byte();
         let end = node.end_byte().min(source.len());
-        let mut index = start;
-        while index < end {
-            if source[index] != b'&' {
-                index += 1;
-                continue;
-            }
-            // Never touch an operator. When a parse cascades, the ERROR node can span
-            // the whole file, and rewriting `&&` to `&amp;&amp;` would destroy real
-            // logical operators — silently lowering complexity and inflating the score.
-            let previous_byte = if index > 0 { source.get(index - 1) } else { None };
-            let next_byte = source.get(index + 1);
-            let is_operator = next_byte == Some(&b'&')
-                || previous_byte == Some(&b'&')
-                || next_byte == Some(&b'=');
-
-            // Leave anything that already looks like an entity (`&amp;`, `&#39;`).
-            let tail = &source[index + 1..end];
-            let is_entity = tail.first() == Some(&b'#')
-                || tail
-                    .iter()
-                    .position(|b| !b.is_ascii_alphanumeric())
-                    .map(|stop| stop > 0 && tail.get(stop) == Some(&b';'))
-                    .unwrap_or(false);
-
-            if !is_operator && !is_entity {
+        for index in node.start_byte()..end {
+            let is_bare = source[index] == b'&'
+                && !is_operator_ampersand(source, index)
+                && !begins_entity(source, index, end);
+            if is_bare {
                 offsets.push(index);
             }
-            index += 1;
         }
     }
+    offsets
+}
+
+fn repair_jsx_ampersands(source: &[u8], root: &Node) -> Option<Vec<u8>> {
+    let mut offsets = bare_ampersand_offsets(source, root);
     // ERROR nodes nest, so the same byte can be collected more than once and in
     // tree order rather than byte order. Both would corrupt the rebuild below.
     offsets.sort_unstable();
@@ -168,7 +173,7 @@ pub fn analyze_source(
 
     let effective = owned_source.as_deref().unwrap_or(source);
     let root = active.root_node();
-    let ctx = FileContext::build(path.to_string(), spec, profile, root, effective);
+    let ctx = FileContext::new(path.to_string(), spec, profile, root, effective);
     let raw = detectors::detect(&ctx);
     let mut report = scoring::score_file(&ctx, raw);
     report.syntax_errors = errors;
@@ -178,6 +183,32 @@ pub fn analyze_source(
 fn analyze_job(job: &AnalysisJob, profile: &Profile) -> FileReport {
     let spec = crate::languages::spec_for_name(job.language).expect("language was resolved");
     analyze_source(&job.path, &job.source, spec, profile)
+}
+
+/// Split a batch into cache hits and the work still to do.
+///
+/// Returns the result slots, pre-filled where the cache answered, alongside the index
+/// and cache key of every job that must actually be analysed.
+fn partition_cached(
+    jobs: &[AnalysisJob],
+    cache: &mut dyn Cache,
+    fingerprint: &str,
+    enabled: bool,
+) -> (Vec<Option<FileReport>>, Vec<(usize, String)>) {
+    let mut slots: Vec<Option<FileReport>> = vec![None; jobs.len()];
+    let mut pending: Vec<(usize, String)> = Vec::new();
+    for (index, job) in jobs.iter().enumerate() {
+        if !enabled {
+            pending.push((index, String::new()));
+            continue;
+        }
+        let key = content_key(&job.path, &job.source, fingerprint);
+        match cache.get(&key) {
+            Some(hit) => slots[index] = Some(hit),
+            None => pending.push((index, key)),
+        }
+    }
+    (slots, pending)
 }
 
 /// Score a batch of jobs, serving what it can from `cache`.
@@ -193,20 +224,7 @@ pub fn analyze_jobs(
     let fingerprint = cache.fingerprint().to_string();
     let enabled = cache.enabled();
 
-    let mut slots: Vec<Option<FileReport>> = vec![None; jobs.len()];
-    let mut pending: Vec<(usize, String)> = Vec::new();
-
-    for (index, job) in jobs.iter().enumerate() {
-        if !enabled {
-            pending.push((index, String::new()));
-            continue;
-        }
-        let key = content_key(&job.path, &job.source, &fingerprint);
-        match cache.get(&key) {
-            Some(hit) => slots[index] = Some(hit),
-            None => pending.push((index, key)),
-        }
-    }
+    let (mut slots, pending) = partition_cached(jobs, cache, &fingerprint, enabled);
 
     let computed: Vec<(usize, String, FileReport)> = pending
         .into_par_iter()
@@ -242,6 +260,28 @@ fn display_path(path: &Path, relative_to: Option<&Path>) -> String {
     }
 }
 
+fn as_posix(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Whether a file is in a supported language and not excluded.
+fn is_scannable(path: &Path, profile: &Profile) -> bool {
+    let shown = as_posix(path);
+    spec_for_path(&shown).is_some() && !profile.is_excluded(&shown)
+}
+
+/// Whether to descend into a directory.
+///
+/// The root is never pruned, so an explicit scan of an excluded directory still
+/// descends. Its files remain subject to `is_scannable`, so pruning is purely a
+/// traversal optimisation and cannot change the result.
+fn keep_directory(entry: &walkdir::DirEntry, profile: &Profile) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    !profile.is_excluded(&as_posix(entry.path()))
+}
+
 /// Every supported, non-excluded file under `roots`, in sorted order.
 ///
 /// Excluded *directories* are pruned rather than walked and filtered per file. That
@@ -252,31 +292,18 @@ pub fn discover(roots: &[PathBuf], profile: &Profile) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     for root in roots {
         if root.is_file() {
-            let shown = root.to_string_lossy().replace('\\', "/");
-            if spec_for_path(&shown).is_some() && !profile.is_excluded(&shown) {
+            if is_scannable(root, profile) {
                 found.push(root.clone());
             }
             continue;
         }
-        let walker = WalkDir::new(root).into_iter().filter_entry(|entry| {
-            // The root is never pruned, so an explicit scan of an excluded directory
-            // still descends. Its files remain subject to the per-file check below, so
-            // pruning is purely a traversal optimisation and cannot change the result.
-            if entry.depth() == 0 || !entry.file_type().is_dir() {
-                return true;
-            }
-            let shown = entry.path().to_string_lossy().replace('\\', "/");
-            !profile.is_excluded(&shown)
-        });
+        let walker = WalkDir::new(root)
+            .into_iter()
+            .filter_entry(|entry| keep_directory(entry, profile));
         for entry in walker.filter_map(Result::ok) {
-            if !entry.file_type().is_file() {
-                continue;
+            if entry.file_type().is_file() && is_scannable(entry.path(), profile) {
+                found.push(entry.path().to_path_buf());
             }
-            let shown = entry.path().to_string_lossy().replace('\\', "/");
-            if spec_for_path(&shown).is_none() || profile.is_excluded(&shown) {
-                continue;
-            }
-            found.push(entry.path().to_path_buf());
         }
     }
     found.sort();

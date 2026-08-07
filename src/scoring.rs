@@ -37,10 +37,11 @@ fn sort_findings(findings: &mut [Finding]) {
     findings.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
 }
 
-/// Attach a penalty to each finding, respecting per-rule file caps.
-pub fn price_findings(raw: Vec<RawFinding>, profile: &Profile) -> Vec<Finding> {
-    // Group by category, preserving first-seen order to match the reference
-    // implementation's insertion-ordered dict.
+/// Group findings by rule, preserving first-seen order so that cap allocation breaks
+/// ties the same way the reference implementation's insertion-ordered dict did.
+fn group_by_category(
+    raw: Vec<RawFinding>,
+) -> (Vec<&'static str>, HashMap<&'static str, Vec<RawFinding>>) {
     let mut order: Vec<&'static str> = Vec::new();
     let mut by_category: HashMap<&'static str, Vec<RawFinding>> = HashMap::new();
     for finding in raw {
@@ -50,6 +51,12 @@ pub fn price_findings(raw: Vec<RawFinding>, profile: &Profile) -> Vec<Finding> {
         }
         by_category.entry(category).or_default().push(finding);
     }
+    (order, by_category)
+}
+
+/// Attach a penalty to each finding, respecting per-rule file caps.
+pub fn price_findings(raw: Vec<RawFinding>, profile: &Profile) -> Vec<Finding> {
+    let (order, mut by_category) = group_by_category(raw);
 
     let mut priced: Vec<Finding> = Vec::new();
     for category in order {

@@ -1,0 +1,55 @@
+{
+  "name": "aqs-self",
+
+  "_why": {
+    "summary": [
+      "Four rules are switched off for this repository, and only these four.",
+      "Everything else was fixed in the code: 6.23 -> 9.20 through real refactoring.",
+      "Each exemption is a case where the rule is wrong for this shape of code, not a",
+      "case of the code being wrong. See README, 'Scoring itself'.",
+      "(Rule names cannot be commented inline: an unrecognised name inside `rules` is",
+      "a hard error, deliberately, so that a typo can never silently disable a rule.)"
+    ],
+
+    "Number of Functions in a Single Module": [
+      "metrics.rs is 54 measurement primitives and detectors.rs is 34 (19 rules plus",
+      "helpers). Both are catalogues: every item is small, named, and belongs beside",
+      "its neighbours. Splitting them into sub-modules to satisfy a count would",
+      "scatter cohesive code and help nobody.",
+      "It is also in direct tension with Bumpy Road and Large Method, which is what",
+      "settled it: extracting function_name into three named helpers fixed its Bumpy",
+      "Road finding and pushed the module from 52 functions to 54. Past that point you",
+      "are trading one finding for another rather than improving anything."
+    ],
+
+    "Lines of Code in a Single File": [
+      "Same three files, same argument. 568 lines of measurement primitives is a",
+      "readable module; five files of 110 lines each, split on no principle, is not."
+    ],
+
+    "Low Cohesion": [
+      "Fires on Profile and GateReport, a config object and a report struct. Their",
+      "predicates each consult a different field by design, so LCOM4 reads three",
+      "accessors of three lists as three unrelated jobs. This is the known LCOM4 blind",
+      "spot for data objects, already documented under Known limitations.",
+      "Constructors, pure accessors and associated functions are already excluded from",
+      "the metric; these are what is left."
+    ],
+
+    "Primitive Obsession": [
+      "Fires on gate_side(label, score, detail) and on difflib's matches_before and",
+      "matches_after, which take four byte indices because that is what a search",
+      "window is. In Rust, usize indices and &str labels are the vocabulary of small",
+      "helpers; demanding a newtype for each would add ceremony without removing any",
+      "real confusion. The rule earns its keep on wide domain signatures, which is why",
+      "it stays on everywhere else."
+    ]
+  },
+
+  "rules": {
+    "Number of Functions in a Single Module": 0.0,
+    "Lines of Code in a Single File": 0.0,
+    "Low Cohesion": 0.0,
+    "Primitive Obsession": 0.0
+  }
+}

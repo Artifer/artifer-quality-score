@@ -68,9 +68,7 @@ impl RuleConfig {
     }
 }
 
-const fn rule(base: f64, scale: f64, cap: f64, file_cap: f64) -> RuleConfig {
-    RuleConfig { base, scale, cap, file_cap, weight: 1.0 }
-}
+
 
 #[derive(Debug, Clone)]
 pub struct Profile {
@@ -132,27 +130,27 @@ pub const THRESHOLD_KEYS: &[(&str, f64)] = &[
 pub const RULE_DEFAULTS: &[(&str, RuleConfig)] = &[
     // Complex Method and Deep Nesting carry the most weight: they are the two
     // factors with the strongest published link to defect risk.
-    (COMPLEX_METHOD, rule(0.6, 10.0, 2.5, 5.0)),
-    (DEEP_NESTED_COMPLEXITY, rule(0.8, 2.0, 2.5, 5.0)),
-    (LARGE_METHOD, rule(0.5, 60.0, 2.0, 4.0)),
-    (BUMPY_ROAD, rule(0.5, 2.0, 2.0, 4.0)),
-    (COMPLEX_CONDITIONAL, rule(0.4, 2.0, 1.5, 3.0)),
-    (EXCESS_ARGUMENTS, rule(0.4, 3.0, 1.5, 3.0)),
-    (BRAIN_METHOD, rule(1.5, 15.0, 3.0, 4.5)),
-    (CONSTRUCTOR_OVER_INJECTION, rule(0.5, 3.0, 1.5, 2.0)),
-    (STRING_HEAVY_ARGUMENTS, rule(0.3, 2.0, 1.0, 2.0)),
-    (PRIMITIVE_OBSESSION, rule(0.4, 0.0, 0.4, 1.6)),
-    (CODE_DUPLICATION, rule(0.8, 0.0, 0.8, 3.0)),
+    (COMPLEX_METHOD, RuleConfig { base: 0.6, scale: 10.0, cap: 2.5, file_cap: 5.0, weight: 1.0 }),
+    (DEEP_NESTED_COMPLEXITY, RuleConfig { base: 0.8, scale: 2.0, cap: 2.5, file_cap: 5.0, weight: 1.0 }),
+    (LARGE_METHOD, RuleConfig { base: 0.5, scale: 60.0, cap: 2.0, file_cap: 4.0, weight: 1.0 }),
+    (BUMPY_ROAD, RuleConfig { base: 0.5, scale: 2.0, cap: 2.0, file_cap: 4.0, weight: 1.0 }),
+    (COMPLEX_CONDITIONAL, RuleConfig { base: 0.4, scale: 2.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
+    (EXCESS_ARGUMENTS, RuleConfig { base: 0.4, scale: 3.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
+    (BRAIN_METHOD, RuleConfig { base: 1.5, scale: 15.0, cap: 3.0, file_cap: 4.5, weight: 1.0 }),
+    (CONSTRUCTOR_OVER_INJECTION, RuleConfig { base: 0.5, scale: 3.0, cap: 1.5, file_cap: 2.0, weight: 1.0 }),
+    (STRING_HEAVY_ARGUMENTS, RuleConfig { base: 0.3, scale: 2.0, cap: 1.0, file_cap: 2.0, weight: 1.0 }),
+    (PRIMITIVE_OBSESSION, RuleConfig { base: 0.4, scale: 0.0, cap: 0.4, file_cap: 1.6, weight: 1.0 }),
+    (CODE_DUPLICATION, RuleConfig { base: 0.8, scale: 0.0, cap: 0.8, file_cap: 3.0, weight: 1.0 }),
     // Test-specific
-    (LARGE_ASSERTION_BLOCKS, rule(0.3, 8.0, 1.0, 2.0)),
-    (DUPLICATED_ASSERTION_BLOCKS, rule(0.4, 0.0, 0.4, 2.0)),
+    (LARGE_ASSERTION_BLOCKS, RuleConfig { base: 0.3, scale: 8.0, cap: 1.0, file_cap: 2.0, weight: 1.0 }),
+    (DUPLICATED_ASSERTION_BLOCKS, RuleConfig { base: 0.4, scale: 0.0, cap: 0.4, file_cap: 2.0, weight: 1.0 }),
     // File / module level
-    (FILE_SIZE, rule(0.5, 500.0, 2.0, 2.0)),
-    (DECLARATION_SIZE, rule(0.3, 300.0, 1.0, 1.0)),
-    (FUNCTION_COUNT, rule(0.4, 15.0, 1.5, 1.5)),
-    (OVERALL_COMPLEXITY, rule(0.6, 4.0, 2.5, 2.5)),
-    (BRAIN_CLASS, rule(1.5, 0.0, 1.5, 3.0)),
-    (LOW_COHESION, rule(0.6, 2.0, 2.0, 2.0)),
+    (FILE_SIZE, RuleConfig { base: 0.5, scale: 500.0, cap: 2.0, file_cap: 2.0, weight: 1.0 }),
+    (DECLARATION_SIZE, RuleConfig { base: 0.3, scale: 300.0, cap: 1.0, file_cap: 1.0, weight: 1.0 }),
+    (FUNCTION_COUNT, RuleConfig { base: 0.4, scale: 15.0, cap: 1.5, file_cap: 1.5, weight: 1.0 }),
+    (OVERALL_COMPLEXITY, RuleConfig { base: 0.6, scale: 4.0, cap: 2.5, file_cap: 2.5, weight: 1.0 }),
+    (BRAIN_CLASS, RuleConfig { base: 1.5, scale: 0.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
+    (LOW_COHESION, RuleConfig { base: 0.6, scale: 2.0, cap: 2.0, file_cap: 2.0, weight: 1.0 }),
 ];
 
 const TEST_PATTERNS: &[&str] = &[
@@ -345,109 +343,157 @@ pub fn find_config(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Fold in the shadcn directory a repository declares.
+///
+/// A declared component directory is a fact about the repository, not a preference, so
+/// it applies whether or not there is an `.aqs.json`.
+fn apply_shadcn(profile: &mut Profile, root: &Path) {
+    let Some(ui) = detect_shadcn_ui(root) else { return };
+    for pattern in [format!("{ui}/*"), format!("*/{ui}/*")] {
+        if !profile.exclude_patterns.contains(&pattern) {
+            profile.exclude_patterns.push(pattern);
+        }
+    }
+}
+
+fn apply_thresholds(profile: &mut Profile, thresholds: &serde_json::Value) -> Result<()> {
+    let Some(map) = thresholds.as_object() else {
+        bail!("thresholds must be an object");
+    };
+    for (key, value) in map {
+        if !profile.thresholds.contains_key(key) {
+            bail!("unknown threshold {key:?}. Run `aqs explain --thresholds` for valid names.");
+        }
+        let Some(number) = value.as_f64() else {
+            bail!("threshold {key:?} must be a number, got {value}");
+        };
+        profile.thresholds.insert(key.clone(), number);
+    }
+    Ok(())
+}
+
+/// Apply one rule override, which is either a bare weight or a field object.
+fn override_rule(name: &str, value: &serde_json::Value, rule: &mut RuleConfig) -> Result<()> {
+    if let Some(weight) = value.as_f64() {
+        rule.weight = weight;
+        return Ok(());
+    }
+    let Some(fields) = value.as_object() else {
+        bail!("rule {name:?} must be a number or an object");
+    };
+    for (field, raw) in fields {
+        let Some(number) = raw.as_f64() else {
+            bail!("rule {name:?} field {field:?} must be a number");
+        };
+        match field.as_str() {
+            "base" => rule.base = number,
+            "scale" => rule.scale = number,
+            "cap" => rule.cap = number,
+            "file_cap" => rule.file_cap = number,
+            "weight" => rule.weight = number,
+            other => bail!("rule {name:?} has unknown field(s): {other}"),
+        }
+    }
+    Ok(())
+}
+
+fn apply_rules(profile: &mut Profile, rules: &serde_json::Value) -> Result<()> {
+    let Some(map) = rules.as_object() else {
+        bail!("rules must be an object");
+    };
+    for (name, value) in map {
+        let Some(mut rule) = profile.rules.get(name).copied() else {
+            bail!("unknown rule {name:?}. Run `aqs explain --list` for valid names.");
+        };
+        override_rule(name, value, &mut rule)?;
+        profile.rules.insert(name.clone(), rule);
+    }
+    Ok(())
+}
+
+fn string_list(object: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<Vec<String>> {
+    let array = object.get(key)?.as_array()?;
+    Some(array.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+}
+
+fn read_config(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("{}: cannot read config", path.display()))?;
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("{}: invalid JSON", path.display()))?;
+    match data {
+        serde_json::Value::Object(object) => Ok(object),
+        _ => bail!("{}: expected a JSON object at the top level", path.display()),
+    }
+}
+
+/// Every section a config file may contain. Anything else is a typo.
+const CONFIG_SECTIONS: &[&str] = &[
+    "name",
+    "thresholds",
+    "rules",
+    "test_patterns",
+    "exclude_patterns",
+    "test_exempt_rules",
+];
+
+/// Reject unrecognised top-level keys.
+///
+/// An unknown *rule* name is already a hard error; an unknown *section* name was not,
+/// so `"exclude_pattern"` or `"rule"` silently did nothing. For a gate, a config that
+/// quietly fails to apply is worse than one that refuses to load. Keys beginning with
+/// `_` are reserved for comments, since JSON has none.
+fn reject_unknown_sections(object: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
+    for key in object.keys() {
+        if key.starts_with('_') || CONFIG_SECTIONS.contains(&key.as_str()) {
+            continue;
+        }
+        bail!(
+            "unknown config section {key:?}. Valid sections: {}. \
+             Keys starting with `_` are treated as comments.",
+            CONFIG_SECTIONS.join(", ")
+        );
+    }
+    Ok(())
+}
+
 /// The default profile with any config file's overrides applied.
 ///
 /// Unknown rule or threshold names are a hard error, never silently ignored: a typo
 /// that quietly disables a rule is the worst possible failure mode for a gate.
 pub fn load_profile(root: &Path, explicit: Option<&Path>) -> Result<Profile> {
-    // A declared shadcn directory is a fact about the repository, not a preference, so
-    // it is folded in whether or not there is an .aqs.json. Duplicates are harmless.
-    let with_shadcn = |mut profile: Profile| -> Profile {
-        if let Some(ui) = detect_shadcn_ui(root) {
-            for pattern in [format!("{ui}/*"), format!("*/{ui}/*")] {
-                if !profile.exclude_patterns.contains(&pattern) {
-                    profile.exclude_patterns.push(pattern);
-                }
-            }
-        }
-        profile
-    };
+    let mut profile = Profile::default();
 
     let config = match explicit {
         Some(path) => Some(path.to_path_buf()),
         None => find_config(root),
     };
-    let Some(config) = config else {
-        return Ok(with_shadcn(Profile::default()));
-    };
 
-    let text = std::fs::read_to_string(&config)
-        .with_context(|| format!("{}: cannot read config", config.display()))?;
-    let data: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| format!("{}: invalid JSON", config.display()))?;
-    let Some(object) = data.as_object() else {
-        bail!("{}: expected a JSON object at the top level", config.display());
-    };
-
-    let mut profile = Profile::default();
-
-    if let Some(name) = object.get("name").and_then(|v| v.as_str()) {
-        profile.name = name.to_string();
-    }
-
-    if let Some(thresholds) = object.get("thresholds") {
-        let Some(map) = thresholds.as_object() else {
-            bail!("thresholds must be an object");
-        };
-        for (key, value) in map {
-            if !profile.thresholds.contains_key(key) {
-                bail!(
-                    "unknown threshold {key:?}. Run `aqs explain --thresholds` for valid names."
-                );
-            }
-            let Some(number) = value.as_f64() else {
-                bail!("threshold {key:?} must be a number, got {value}");
-            };
-            profile.thresholds.insert(key.clone(), number);
+    if let Some(config) = config {
+        let object = read_config(&config)?;
+        reject_unknown_sections(&object)?;
+        if let Some(name) = object.get("name").and_then(|v| v.as_str()) {
+            profile.name = name.to_string();
+        }
+        if let Some(thresholds) = object.get("thresholds") {
+            apply_thresholds(&mut profile, thresholds)?;
+        }
+        if let Some(rules) = object.get("rules") {
+            apply_rules(&mut profile, rules)?;
+        }
+        if let Some(patterns) = string_list(&object, "test_patterns") {
+            profile.test_patterns = patterns;
+        }
+        if let Some(patterns) = string_list(&object, "exclude_patterns") {
+            profile.exclude_patterns = patterns;
+        }
+        if let Some(rules) = string_list(&object, "test_exempt_rules") {
+            profile.test_exempt_rules = rules;
         }
     }
 
-    if let Some(rules) = object.get("rules") {
-        let Some(map) = rules.as_object() else {
-            bail!("rules must be an object");
-        };
-        for (name, value) in map {
-            let Some(existing) = profile.rules.get(name).copied() else {
-                bail!("unknown rule {name:?}. Run `aqs explain --list` for valid names.");
-            };
-            let mut updated = existing;
-            if let Some(weight) = value.as_f64() {
-                updated.weight = weight;
-            } else if let Some(fields) = value.as_object() {
-                for (field, raw) in fields {
-                    let Some(number) = raw.as_f64() else {
-                        bail!("rule {name:?} field {field:?} must be a number");
-                    };
-                    match field.as_str() {
-                        "base" => updated.base = number,
-                        "scale" => updated.scale = number,
-                        "cap" => updated.cap = number,
-                        "file_cap" => updated.file_cap = number,
-                        "weight" => updated.weight = number,
-                        other => bail!("rule {name:?} has unknown field(s): {other}"),
-                    }
-                }
-            } else {
-                bail!("rule {name:?} must be a number or an object");
-            }
-            profile.rules.insert(name.clone(), updated);
-        }
-    }
-
-    if let Some(patterns) = object.get("test_patterns").and_then(|v| v.as_array()) {
-        profile.test_patterns =
-            patterns.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(patterns) = object.get("exclude_patterns").and_then(|v| v.as_array()) {
-        profile.exclude_patterns =
-            patterns.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-    if let Some(rules) = object.get("test_exempt_rules").and_then(|v| v.as_array()) {
-        profile.test_exempt_rules =
-            rules.iter().filter_map(|v| v.as_str().map(String::from)).collect();
-    }
-
-    Ok(with_shadcn(profile))
+    apply_shadcn(&mut profile, root);
+    Ok(profile)
 }
 
 #[cfg(test)]

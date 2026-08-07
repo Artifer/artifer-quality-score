@@ -65,15 +65,18 @@ fn file_deltas(
     deltas
 }
 
+/// What to gate, and how much slack to allow.
+pub struct GateRequest<'a> {
+    pub root: &'a Path,
+    pub profile: &'a Profile,
+    pub against: &'a str,
+    pub tolerance: f64,
+    pub merge_base: bool,
+}
+
 /// Compare the whole repository against a baseline revision.
-pub fn compute_gate(
-    root: &Path,
-    profile: &Profile,
-    against: &str,
-    tolerance: f64,
-    merge_base: bool,
-    cache: &mut dyn Cache,
-) -> Result<GateReport> {
+pub fn compute_gate(request: GateRequest, cache: &mut dyn Cache) -> Result<GateReport> {
+    let GateRequest { root, profile, against, tolerance, merge_base } = request;
     let repo = repo_root(root)?;
     let baseline_revision = resolve_baseline(&repo, against, merge_base)?;
 

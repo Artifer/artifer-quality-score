@@ -14,13 +14,38 @@ use std::sync::{Mutex, OnceLock};
 
 /// Translate an `fnmatch` pattern into an anchored regex, following the same rules
 /// as Python's `fnmatch.translate`.
+/// Translate a `[...]` character class, returning the regex text and the index just
+/// past the closing bracket. An unterminated `[` is a literal, as in `fnmatch`.
+fn translate_class(chars: &[char], open_at: usize) -> (String, usize) {
+    let mut close = open_at;
+    let leads_class = chars
+        .get(close)
+        .is_some_and(|c| *c == '!' || *c == ']');
+    if leads_class {
+        close += 1;
+    }
+    while close < chars.len() && chars[close] != ']' {
+        close += 1;
+    }
+    if close >= chars.len() {
+        return ("\\[".to_string(), open_at);
+    }
+    let mut class: String = chars[open_at..close].iter().collect();
+    if class.starts_with('!') {
+        class.replace_range(0..1, "^");
+    }
+    (format!("[{}]", class.replace('\\', "\\\\")), close + 1)
+}
+
+/// Translate an `fnmatch` pattern into an anchored regex, following the same rules as
+/// Python's `fnmatch.translate`.
 fn translate(pattern: &str) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len() * 2);
-    // Anchored at both ends. Python's `fnmatch.translate` emits only the trailing
-    // `\z` because `fnmatch` applies it with `re.match`, which anchors the start
-    // implicitly. Rust's `is_match` searches anywhere, so the `^` must be explicit —
-    // without it `test_*.py` matches `x_test_a.py`.
+    // Anchored at both ends. Python's `fnmatch.translate` emits only the trailing `\z`
+    // because `fnmatch` applies it with `re.match`, which anchors the start implicitly.
+    // Rust's `is_match` searches anywhere, so the `^` must be explicit — without it
+    // `test_*.py` matches `x_test_a.py`.
     out.push_str("^(?s:");
     let mut index = 0;
 
@@ -31,26 +56,9 @@ fn translate(pattern: &str) -> String {
             '*' => out.push_str(".*"),
             '?' => out.push('.'),
             '[' => {
-                // Find the closing bracket; an unterminated `[` is a literal.
-                let mut close = index;
-                if close < chars.len() && (chars[close] == '!' || chars[close] == ']') {
-                    close += 1;
-                }
-                while close < chars.len() && chars[close] != ']' {
-                    close += 1;
-                }
-                if close >= chars.len() {
-                    out.push_str("\\[");
-                } else {
-                    let mut class: String = chars[index..close].iter().collect();
-                    if class.starts_with('!') {
-                        class.replace_range(0..1, "^");
-                    }
-                    out.push('[');
-                    out.push_str(&class.replace('\\', "\\\\"));
-                    out.push(']');
-                    index = close + 1;
-                }
+                let (class, next) = translate_class(&chars, index);
+                out.push_str(&class);
+                index = next;
             }
             other => out.push_str(&regex::escape(&other.to_string())),
         }

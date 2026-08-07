@@ -9,7 +9,9 @@
 //! narrow, and generic table solvers are free to collapse exactly those.
 
 use crate::explain::{RuleDoc, RULE_DOCS};
-use crate::models::{DeltaReport, FileReport, Finding, GateReport, ScanReport};
+use crate::models::{
+    DeltaReport, FileDelta, FileReport, Finding, GateReport, ScanReport,
+};
 use crate::profile::Profile;
 
 const HEALTHY: f64 = 8.0;
@@ -30,6 +32,17 @@ const LABEL_DEGRADED: &str = "worse";
 const LABEL_IMPROVED: &str = "better";
 const LABEL_FIXED: &str = "fixed";
 
+/// The colour a score is shown in. A free function: it depends only on the number.
+fn score_colour(score: f64) -> &'static str {
+    if score >= HEALTHY {
+        GREEN
+    } else if score >= WARNING {
+        YELLOW
+    } else {
+        RED
+    }
+}
+
 pub struct Style {
     colour: bool,
     pub width: usize,
@@ -48,20 +61,10 @@ impl Style {
         }
     }
 
-    fn score_colour(&self, score: f64) -> &'static str {
-        if score >= HEALTHY {
-            GREEN
-        } else if score >= WARNING {
-            YELLOW
-        } else {
-            RED
-        }
-    }
-
     fn score(&self, score: f64, width: usize) -> String {
         let text = format!("{score:>width$.2}");
         if self.colour {
-            format!("{BOLD}{}{}{RESET}", self.score_colour(score), text)
+            format!("{BOLD}{}{}{RESET}", score_colour(score), text)
         } else {
             text
         }
@@ -178,36 +181,25 @@ fn file_findings(report: &FileReport) -> Vec<&Finding> {
     findings
 }
 
-pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: bool) {
-    println!();
-    println!(
-        "  {}{}",
-        style.paint("Artifer Quality Score", BOLD),
-        style.paint(&format!("   profile {} · v{}", report.profile, report.version), DIM)
-    );
-    println!();
-    println!(
-        "  {}{}",
-        style.score(report.score, 0),
-        style.paint(
-            &format!(
-                " / 10   {} files · {} LoC · {} findings",
-                report.scored_files().count(),
-                thousands(report.loc),
-                report.findings_count()
-            ),
-            DIM
-        )
-    );
+fn render_scan_summary(report: &ScanReport, style: &Style) {
+    let mut summary = format!("  {}", style.score(report.score, 0));
+    summary.push_str(&style.paint(
+        &format!(
+            " / 10   {} files · {} LoC · {} findings",
+            report.scored_files().count(),
+            thousands(report.loc),
+            report.findings_count()
+        ),
+        DIM,
+    ));
+    println!("{summary}");
 
     let broken = report.scored_files().filter(|f| f.syntax_errors > 0).count();
     if broken > 0 {
         println!(
             "{}",
             style.paint(
-                &format!(
-                    "  {broken} file(s) had syntax errors; their scores are approximate"
-                ),
+                &format!("  {broken} file(s) had syntax errors; their scores are approximate"),
                 YELLOW
             )
         );
@@ -216,7 +208,10 @@ pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: b
     if skipped > 0 {
         println!("{}", style.paint(&format!("  {skipped} file(s) skipped"), DIM));
     }
+}
 
+/// Files with findings, worst first.
+fn flagged_files(report: &ScanReport) -> Vec<&FileReport> {
     let mut flagged: Vec<&FileReport> =
         report.scored_files().filter(|f| f.finding_count() > 0).collect();
     flagged.sort_by(|a, b| {
@@ -226,7 +221,34 @@ pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: b
             .then_with(|| b.loc.cmp(&a.loc))
             .then_with(|| a.path.cmp(&b.path))
     });
+    flagged
+}
 
+fn render_scan_files(flagged: &[&FileReport], shown: usize, style: &Style) {
+    let layout = Layout::for_width(style.width);
+    for file in flagged.iter().take(shown) {
+        println!(
+            "  {}  {}{}",
+            style.score(file.score, 5),
+            style.paint(&file.path, score_colour(file.score)),
+            style.paint(&format!("  ({} LoC)", file.loc), DIM)
+        );
+        for finding in file_findings(file) {
+            println!("{}", finding_line(finding, &layout, style));
+        }
+        println!();
+    }
+}
+
+pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: bool) {
+    print_title(
+        "Artifer Quality Score",
+        &format!("   profile {} · v{}", report.profile, report.version),
+        style,
+    );
+    render_scan_summary(report, style);
+
+    let flagged = flagged_files(report);
     if flagged.is_empty() {
         println!();
         println!(
@@ -242,26 +264,11 @@ pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: b
     println!();
     println!(
         "  {}",
-        style.paint(
-            &format!("Lowest scoring files ({} of {})", shown, flagged.len()),
-            BOLD
-        )
+        style.paint(&format!("Lowest scoring files ({} of {})", shown, flagged.len()), BOLD)
     );
     println!();
 
-    let layout = Layout::for_width(style.width);
-    for file in flagged.iter().take(shown) {
-        println!(
-            "  {}  {}{}",
-            style.score(file.score, 5),
-            style.paint(&file.path, style.score_colour(file.score)),
-            style.paint(&format!("  ({} LoC)", file.loc), DIM)
-        );
-        for finding in file_findings(file) {
-            println!("{}", finding_line(finding, &layout, style));
-        }
-        println!();
-    }
+    render_scan_files(&flagged, shown, style);
 
     if !show_all && flagged.len() > limit {
         println!(
@@ -278,23 +285,19 @@ pub fn render_scan(report: &ScanReport, style: &Style, limit: usize, show_all: b
     }
 }
 
-fn change_rows(
-    introduced: &[Finding],
-    degraded: &[Finding],
-    improved: &[Finding],
-    fixed: &[Finding],
-    layout: &Layout,
-    style: &Style,
-    include_positive: bool,
-) {
+/// The introduced/degraded/improved/fixed rows under one changed file.
+///
+/// Takes the `FileDelta` rather than its four finding lists plus flags: the previous
+/// signature needed seven arguments, which is exactly the smell this tool reports.
+fn delta_rows(file: &FileDelta, layout: &Layout, style: &Style, include_positive: bool) {
     let gap = " ".repeat(GAP);
     let mut groups: Vec<(&str, &[Finding], &str)> = vec![
-        (LABEL_INTRODUCED, introduced, RED),
-        (LABEL_DEGRADED, degraded, YELLOW),
+        (LABEL_INTRODUCED, &file.introduced, RED),
+        (LABEL_DEGRADED, &file.degraded, YELLOW),
     ];
     if include_positive {
-        groups.push((LABEL_IMPROVED, improved, GREEN));
-        groups.push((LABEL_FIXED, fixed, GREEN));
+        groups.push((LABEL_IMPROVED, &file.improved, GREEN));
+        groups.push((LABEL_FIXED, &file.fixed, GREEN));
     }
 
     for (label, findings, colour) in groups {
@@ -319,17 +322,32 @@ fn change_rows(
     }
 }
 
-pub fn render_delta(report: &DeltaReport, style: &Style, threshold: f64) {
-    println!();
+/// The `  -1.20  path  (7.16 → 6.98)` heading for one changed file.
+fn delta_heading(file: &FileDelta, style: &Style) {
+    let colour = if file.is_regression() { RED } else { GREEN };
+    let old = file.old_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "new".into());
+    let new = file.new_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "deleted".into());
     println!(
-        "  {}{}",
-        style.paint("Artifer Quality Score · delta", BOLD),
-        style.paint(
-            &format!("   baseline {} · v{}", report.baseline, report.version),
-            DIM
-        )
+        "  {}  {}{}",
+        style.change(file.score_change),
+        style.paint(&file.path, colour),
+        style.paint(&format!("  ({old} → {new})"), DIM)
     );
+}
+
+/// The bold title line shared by every report.
+fn print_title(title: &str, detail: &str, style: &Style) {
     println!();
+    println!("  {}{}", style.paint(title, BOLD), style.paint(detail, DIM));
+    println!();
+}
+
+pub fn render_delta(report: &DeltaReport, style: &Style, threshold: f64) {
+    print_title(
+        "Artifer Quality Score · delta",
+        &format!("   baseline {} · v{}", report.baseline, report.version),
+        style,
+    );
 
     if report.files.is_empty() {
         println!("{}", style.paint("  No changed files to score.", DIM));
@@ -354,24 +372,8 @@ pub fn render_delta(report: &DeltaReport, style: &Style, threshold: f64) {
 
     let layout = Layout::for_width(style.width);
     for file in &report.files {
-        let colour = if file.is_regression() { RED } else { GREEN };
-        let old = file.old_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "new".into());
-        let new = file.new_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "deleted".into());
-        println!(
-            "  {}  {}{}",
-            style.change(file.score_change),
-            style.paint(&file.path, colour),
-            style.paint(&format!("  ({old} → {new})"), DIM)
-        );
-        change_rows(
-            &file.introduced,
-            &file.degraded,
-            &file.improved,
-            &file.fixed,
-            &layout,
-            style,
-            true,
-        );
+        delta_heading(file, style);
+        delta_rows(file, &layout, style, true);
         println!();
     }
 
@@ -391,73 +393,61 @@ pub fn render_delta(report: &DeltaReport, style: &Style, threshold: f64) {
     }
 }
 
-pub fn render_gate(report: &GateReport, style: &Style) {
-    println!();
-    println!(
-        "  {}{}",
-        style.paint("Artifer Quality Score · merge gate", BOLD),
-        style.paint(&format!("   v{}", report.version), DIM)
-    );
-    println!();
+/// One side of the gate comparison: `baseline  9.46   develop @ dbbd8f3c  77 files`.
+fn gate_side(label: &str, score: f64, detail: &str, style: &Style) {
     println!(
         "  {}{}{}",
-        style.paint("baseline  ", DIM),
-        style.score(report.baseline_score, 0),
-        style.paint(
-            &format!(
-                "   {} @ {}   {} files · {} LoC",
-                report.against,
-                &report.baseline_revision[..8.min(report.baseline_revision.len())],
-                report.baseline_file_count,
-                thousands(report.baseline_loc)
-            ),
-            DIM
-        )
+        style.paint(label, DIM),
+        style.score(score, 0),
+        style.paint(detail, DIM)
     );
-    println!(
-        "  {}{}{}",
-        style.paint("current   ", DIM),
-        style.score(report.current_score, 0),
-        style.paint(
-            &format!(
-                "   {} files · {} LoC",
-                report.current_file_count,
-                thousands(report.current_loc)
-            ),
-            DIM
-        )
+}
+
+fn render_gate_header(report: &GateReport, style: &Style) {
+    print_title(
+        "Artifer Quality Score · merge gate",
+        &format!("   v{}", report.version),
+        style,
+    );
+    gate_side(
+        "baseline  ",
+        report.baseline_score,
+        &format!(
+            "   {} @ {}   {} files · {} LoC",
+            report.against,
+            &report.baseline_revision[..8.min(report.baseline_revision.len())],
+            report.baseline_file_count,
+            thousands(report.baseline_loc)
+        ),
+        style,
+    );
+    gate_side(
+        "current   ",
+        report.current_score,
+        &format!(
+            "   {} files · {} LoC",
+            report.current_file_count,
+            thousands(report.current_loc)
+        ),
+        style,
     );
     println!("  {}{}", style.paint("change    ", DIM), style.change(report.score_change));
     println!();
+}
 
+fn render_gate_files(report: &GateReport, style: &Style) {
     // Files that changed without moving their score are not interesting here; showing
     // them buries the files that actually caused the drop.
-    let moved: Vec<_> = report.files.iter().filter(|f| f.score_change != 0.0).collect();
+    let moved: Vec<&FileDelta> =
+        report.files.iter().filter(|f| f.score_change != 0.0).collect();
     let unchanged = report.files.len() - moved.len();
 
     if !moved.is_empty() {
         let layout = Layout::for_width(style.width);
         println!("  {}", style.paint("Changed files that moved the score", BOLD));
-        for file in &moved {
-            let colour = if file.is_regression() { RED } else { GREEN };
-            let old = file.old_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "new".into());
-            let new =
-                file.new_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "deleted".into());
-            println!(
-                "  {}  {}{}",
-                style.change(file.score_change),
-                style.paint(&file.path, colour),
-                style.paint(&format!("  ({old} → {new})"), DIM)
-            );
-            change_rows(
-                &file.introduced,
-                &file.degraded,
-                &file.improved,
-                &file.fixed,
-                &layout,
-                style,
-                false,
-            );
+        for file in moved {
+            delta_heading(file, style);
+            delta_rows(file, &layout, style, false);
         }
         println!();
     }
@@ -469,7 +459,9 @@ pub fn render_gate(report: &GateReport, style: &Style) {
         );
         println!();
     }
+}
 
+fn render_gate_verdict(report: &GateReport, style: &Style) {
     if report.passed() {
         let detail = if report.score_change > 0.0 {
             format!("  repository score improved by {:.2}", report.score_change)
@@ -496,6 +488,12 @@ pub fn render_gate(report: &GateReport, style: &Style) {
         );
     }
     println!();
+}
+
+pub fn render_gate(report: &GateReport, style: &Style) {
+    render_gate_header(report, style);
+    render_gate_files(report, style);
+    render_gate_verdict(report, style);
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -535,25 +533,31 @@ pub fn render_explain(doc: &RuleDoc, profile: &Profile, style: &Style) {
         println!();
     }
 
-    if !doc.thresholds.is_empty() {
-        let rule = profile.rule(doc.category);
-        println!("  {}", style.paint("Configuration", BOLD));
-        for key in doc.thresholds {
-            let value = profile.threshold(key);
-            println!("{}", style.paint(&format!("    {:<52} {}", key, number(value)), DIM));
-        }
-        println!(
-            "{}",
-            style.paint(
-                &format!(
-                    "    {:<52} {}  (base {}, cap {}, file cap {})",
-                    "weight", rule.weight, rule.base, rule.cap, rule.file_cap
-                ),
-                DIM
-            )
-        );
-        println!();
+    render_rule_config(doc, profile, style);
+}
+
+/// The thresholds and weight that govern one rule.
+fn render_rule_config(doc: &RuleDoc, profile: &Profile, style: &Style) {
+    if doc.thresholds.is_empty() {
+        return;
     }
+    let rule = profile.rule(doc.category);
+    println!("  {}", style.paint("Configuration", BOLD));
+    for key in doc.thresholds {
+        let value = profile.threshold(key);
+        println!("{}", style.paint(&format!("    {:<52} {}", key, number(value)), DIM));
+    }
+    println!(
+        "{}",
+        style.paint(
+            &format!(
+                "    {:<52} {}  (base {}, cap {}, file cap {})",
+                "weight", rule.weight, rule.base, rule.cap, rule.file_cap
+            ),
+            DIM
+        )
+    );
+    println!();
 }
 
 pub fn render_rule_list(profile: &Profile, style: &Style) {

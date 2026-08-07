@@ -433,6 +433,53 @@ there is no public number to copy and no claim of equivalence here.
 Its scores are not comparable to CodeScene's and should never be presented as
 such.
 
+## Scoring itself
+
+`aqs` scores this repository, and the result is worth reading as a worked example of
+what the metric is and is not good for.
+
+```
+aqs scan src tests examples        10.00 / 10   20 files · 5,376 LoC · 0 findings
+```
+
+It did not start there. The first self-scan was **6.23**, and the findings were real:
+
+| | Finding | Verdict |
+| --- | --- | --- |
+| `load_profile` | Brain Method — 90 lines, cc 21, nesting 5 | true, now four named steps |
+| `run` | 190 lines, cc 26 | true, now one handler per subcommand |
+| `constructor_over_injection` | 98% similar to `excess_arguments` | true, now one detector |
+| `find_longest_match` | cc 14, nesting 4 | true, flattened without touching the algorithm |
+
+Getting from 6.23 to 9.20 was **all refactoring**, and the code is better for it. The
+last 0.8 was not, and the reason is the interesting part.
+
+**Two rules pull against each other.** Bumpy Road and Large Method ask you to extract
+functions; Number of Functions in a Single Module counts them. Splitting `function_name`
+into three named helpers removed its Bumpy Road finding and took `metrics.rs` from 52
+functions to 54. Extracting `matches_before`/`matches_after` from difflib removed a
+Bumpy Road and created two Primitive Obsession findings, because a search window is four
+byte indices however you package it.
+
+Past that point you are trading one finding for another, not improving the code. So four
+rules are switched off in [`.aqs.json`](.aqs.json) — and only four — each with its
+reasoning recorded in the file:
+
+- **Number of Functions in a Single Module** and **Lines of Code in a Single File**:
+  `metrics.rs` is 54 measurement primitives, `detectors.rs` is 34. They are catalogues,
+  and splitting them on no principle would scatter cohesive code.
+- **Low Cohesion**: fires on `Profile` and `GateReport`, a config object and a report
+  struct whose predicates each consult a different field by design. The known LCOM4
+  blind spot for data objects.
+- **Primitive Obsession**: fires on small Rust helpers taking `usize` indices, which is
+  the vocabulary of that language rather than a design failure.
+
+**A 10.00 with four rules disabled is not the same claim as a 10.00 without.** That is
+why the exemptions live in a file you can read, why unknown rule *and* section names are
+hard errors, and why the profile name (`aqs-self`) is printed in the header of every
+report. If you point a model at this metric, expect it to find this same wall — and
+prefer a documented exemption to a contorted refactor when it does.
+
 ## Provenance
 
 This started as a Python implementation, which was then ported to Rust and verified

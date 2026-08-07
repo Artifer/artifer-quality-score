@@ -14,9 +14,9 @@
 //! tool could not run.
 
 use aqs::cache::open_cache;
-use aqs::delta::compute_delta;
+use aqs::delta::{compute_delta, DeltaRequest};
 use aqs::explain::{lookup, RULE_DOCS};
-use aqs::gate::compute_gate;
+use aqs::gate::{compute_gate, GateRequest};
 use aqs::models::ScanReport;
 use aqs::profile::{load_profile, Profile};
 use aqs::render::{self, Style};
@@ -50,105 +50,120 @@ struct ProfileArgs {
     profile_path: Option<PathBuf>,
 }
 
+#[derive(Args)]
+struct ScanArgs {
+    /// Files or directories to scan. Defaults to the CWD.
+    paths: Vec<PathBuf>,
+    /// Emit the full report as JSON.
+    #[arg(long)]
+    json: bool,
+    /// With --json, embed fix guidance for every rule that fired.
+    #[arg(long)]
+    guidance: bool,
+    /// Show every file with findings.
+    #[arg(long)]
+    all: bool,
+    /// How many files to show.
+    #[arg(long, short = 'n', default_value_t = 10)]
+    limit: usize,
+    /// Exit non-zero if the aggregate score falls below this.
+    #[arg(long)]
+    min_score: Option<f64>,
+    /// Disable the .aqs/ report cache.
+    #[arg(long)]
+    no_cache: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Args)]
+struct DeltaArgs {
+    /// Git ref to compare against.
+    #[arg(long, short, default_value = "HEAD")]
+    baseline: String,
+    /// Score the index instead of the working tree.
+    #[arg(long)]
+    staged: bool,
+    /// Allowed aggregate score decrease before failing.
+    #[arg(long, default_value_t = 0.0)]
+    max_drop: f64,
+    /// Compare against the merge base rather than the ref's tip.
+    #[arg(long)]
+    merge_base: bool,
+    /// Emit the delta report as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Repository to inspect.
+    #[arg(long)]
+    path: Option<PathBuf>,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Args)]
+struct GateArgs {
+    /// Branch or ref to compare the whole repository against.
+    #[arg(long, short, default_value = "origin/develop")]
+    against: String,
+    /// Allowed repository score drop. 0 means it may never go down.
+    #[arg(long, default_value_t = 0.0)]
+    tolerance: f64,
+    /// Compare against the ref's tip instead of the merge base.
+    #[arg(long)]
+    no_merge_base: bool,
+    /// Emit the gate report as JSON.
+    #[arg(long)]
+    json: bool,
+    /// Repository to inspect.
+    #[arg(long)]
+    path: Option<PathBuf>,
+    /// Disable the .aqs/ report cache.
+    #[arg(long)]
+    no_cache: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Args)]
+struct CheckArgs {
+    /// Files or directories to check. Defaults to the CWD.
+    paths: Vec<PathBuf>,
+    /// Exit non-zero if anything is found.
+    #[arg(long)]
+    fail_on_findings: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
+#[derive(Args)]
+struct ExplainArgs {
+    /// Rule name, e.g. 'Bumpy Road Ahead'.
+    rule: Option<String>,
+    /// List every rule and its weight.
+    #[arg(long)]
+    list: bool,
+    /// List every configurable threshold.
+    #[arg(long)]
+    thresholds: bool,
+    /// Emit the guidance as JSON.
+    #[arg(long)]
+    json: bool,
+    #[command(flatten)]
+    profile: ProfileArgs,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Score a tree and report the lowest-scoring files.
-    Scan {
-        /// Files or directories to scan. Defaults to the CWD.
-        paths: Vec<PathBuf>,
-        /// Emit the full report as JSON.
-        #[arg(long)]
-        json: bool,
-        /// With --json, embed fix guidance for every rule that fired.
-        #[arg(long)]
-        guidance: bool,
-        /// Show every file with findings.
-        #[arg(long)]
-        all: bool,
-        /// How many files to show.
-        #[arg(long, short = 'n', default_value_t = 10)]
-        limit: usize,
-        /// Exit non-zero if the aggregate score falls below this.
-        #[arg(long)]
-        min_score: Option<f64>,
-        /// Disable the .aqs/ report cache.
-        #[arg(long)]
-        no_cache: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-    },
+    Scan(ScanArgs),
     /// Compare changed files against a git baseline. Fails on regression.
-    Delta {
-        /// Git ref to compare against.
-        #[arg(long, short, default_value = "HEAD")]
-        baseline: String,
-        /// Score the index instead of the working tree.
-        #[arg(long)]
-        staged: bool,
-        /// Allowed aggregate score decrease before failing.
-        #[arg(long, default_value_t = 0.0)]
-        max_drop: f64,
-        /// Compare against the merge base rather than the ref's tip.
-        #[arg(long)]
-        merge_base: bool,
-        /// Emit the delta report as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Repository to inspect.
-        #[arg(long)]
-        path: Option<PathBuf>,
-        #[command(flatten)]
-        profile: ProfileArgs,
-    },
+    Delta(DeltaArgs),
     /// Enforce that the whole repository's score never goes down.
-    Gate {
-        /// Branch or ref to compare the whole repository against.
-        #[arg(long, short, default_value = "origin/develop")]
-        against: String,
-        /// Allowed repository score drop. 0 means it may never go down.
-        #[arg(long, default_value_t = 0.0)]
-        tolerance: f64,
-        /// Compare against the ref's tip instead of the merge base.
-        #[arg(long)]
-        no_merge_base: bool,
-        /// Emit the gate report as JSON.
-        #[arg(long)]
-        json: bool,
-        /// Repository to inspect.
-        #[arg(long)]
-        path: Option<PathBuf>,
-        /// Disable the .aqs/ report cache.
-        #[arg(long)]
-        no_cache: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-    },
+    Gate(GateArgs),
     /// Emit findings as lint-style `path:line:col: rule: details` lines.
-    Check {
-        /// Files or directories to check. Defaults to the CWD.
-        paths: Vec<PathBuf>,
-        /// Exit non-zero if anything is found.
-        #[arg(long)]
-        fail_on_findings: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-    },
+    Check(CheckArgs),
     /// Explain what a rule means, why it matters, and how to fix it.
-    Explain {
-        /// Rule name, e.g. 'Bumpy Road Ahead'.
-        rule: Option<String>,
-        /// List every rule and its weight.
-        #[arg(long)]
-        list: bool,
-        /// List every configurable threshold.
-        #[arg(long)]
-        thresholds: bool,
-        /// Emit the guidance as JSON.
-        #[arg(long)]
-        json: bool,
-        #[command(flatten)]
-        profile: ProfileArgs,
-    },
+    Explain(ExplainArgs),
 }
 
 fn terminal_width() -> usize {
@@ -225,209 +240,197 @@ fn base_of(targets: &[PathBuf]) -> PathBuf {
     }
 }
 
+fn run_scan(args: ScanArgs) -> Result<ExitCode, ExitCode> {
+    let targets = resolve_targets(args.paths)?;
+    let base = base_of(&targets);
+    let loaded = load(&base, args.profile.profile_path.as_deref())?;
+    let mut cache = open_cache(Some(&base), &loaded, !args.no_cache);
+    let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
+
+    if args.json {
+        let mut value = serde_json::to_value(&report).expect("serialisable");
+        if args.guidance {
+            value
+                .as_object_mut()
+                .expect("report is an object")
+                .insert("guidance".into(), guidance_for(&report));
+        }
+        print_json(&value);
+    } else {
+        render::render_scan(&report, &style(), args.limit, args.all);
+    }
+
+    let Some(minimum) = args.min_score else {
+        return Ok(ExitCode::from(EXIT_OK));
+    };
+    if report.score >= minimum {
+        return Ok(ExitCode::from(EXIT_OK));
+    }
+    if !args.json {
+        eprintln!("score {:.2} is below the required {minimum:.2}", report.score);
+    }
+    Ok(ExitCode::from(EXIT_GATE_FAILED))
+}
+
+fn run_delta(args: DeltaArgs) -> Result<ExitCode, ExitCode> {
+    let root = args.path.unwrap_or_else(current_dir);
+    let loaded = load(&root, args.profile.profile_path.as_deref())?;
+    let mut cache = open_cache(None, &loaded, false);
+    let report = compute_delta(
+        DeltaRequest {
+            root: &root,
+            profile: &loaded,
+            baseline: &args.baseline,
+            staged: args.staged,
+            merge_base: args.merge_base,
+        },
+        cache.as_mut(),
+    )
+    .map_err(git_error)?;
+
+    if args.json {
+        print_json(&serde_json::to_value(&report).expect("serialisable"));
+    } else {
+        render::render_delta(&report, &style(), args.max_drop);
+    }
+
+    let failed = report.score_change < -args.max_drop.abs();
+    Ok(ExitCode::from(if failed { EXIT_GATE_FAILED } else { EXIT_OK }))
+}
+
+fn run_gate(args: GateArgs) -> Result<ExitCode, ExitCode> {
+    let root = args.path.unwrap_or_else(current_dir);
+    let loaded = load(&root, args.profile.profile_path.as_deref())?;
+    let repo_root = aqs::gitio::repo_root(&root).ok();
+    let mut cache = open_cache(repo_root.as_deref(), &loaded, !args.no_cache);
+    let report = compute_gate(
+        GateRequest {
+            root: &root,
+            profile: &loaded,
+            against: &args.against,
+            tolerance: args.tolerance,
+            merge_base: !args.no_merge_base,
+        },
+        cache.as_mut(),
+    )
+    .map_err(git_error)?;
+
+    if args.json {
+        print_json(&serde_json::to_value(&report).expect("serialisable"));
+    } else {
+        render::render_gate(&report, &style());
+    }
+    Ok(ExitCode::from(if report.passed() { EXIT_OK } else { EXIT_GATE_FAILED }))
+}
+
+fn run_check(args: CheckArgs) -> Result<ExitCode, ExitCode> {
+    let targets = resolve_targets(args.paths)?;
+    let base = base_of(&targets);
+    let loaded = load(&base, args.profile.profile_path.as_deref())?;
+    let mut cache = open_cache(None, &loaded, false);
+    let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
+    render::render_check(&report);
+
+    let failed = args.fail_on_findings && report.findings_count() > 0;
+    Ok(ExitCode::from(if failed { EXIT_GATE_FAILED } else { EXIT_OK }))
+}
+
+fn thresholds_as_json(profile: &Profile, keys: &[&str]) -> Value {
+    let mut map = Map::new();
+    for key in keys {
+        map.insert((*key).to_string(), json!(profile.threshold(key)));
+    }
+    Value::Object(map)
+}
+
+/// Every rule as JSON, for `--list --json`.
+fn rules_as_json(profile: &Profile) -> Value {
+    let mut map = Map::new();
+    for doc in RULE_DOCS {
+        map.insert(
+            doc.category.to_string(),
+            json!({
+                "summary": doc.summary,
+                "why": doc.why,
+                "fix": doc.fix,
+                "weight": profile.rule(doc.category).weight,
+                "thresholds": thresholds_as_json(profile, doc.thresholds),
+            }),
+        );
+    }
+    Value::Object(map)
+}
+
+fn one_rule_as_json(profile: &Profile, doc: &aqs::explain::RuleDoc) -> Value {
+    json!({
+        "category": doc.category,
+        "summary": doc.summary,
+        "why": doc.why,
+        "fix": doc.fix,
+        "thresholds": thresholds_as_json(profile, doc.thresholds),
+    })
+}
+
+fn list_thresholds(profile: &Profile, as_json: bool, style: &Style) {
+    if as_json {
+        let keys: Vec<&str> = profile.thresholds.keys().map(String::as_str).collect();
+        print_json(&thresholds_as_json(profile, &keys));
+    } else {
+        render::render_thresholds(profile, style);
+    }
+}
+
+fn list_rules(profile: &Profile, as_json: bool, style: &Style) {
+    if as_json {
+        print_json(&rules_as_json(profile));
+    } else {
+        render::render_rule_list(profile, style);
+    }
+}
+
+fn run_explain(args: ExplainArgs) -> Result<ExitCode, ExitCode> {
+    let loaded = load(&current_dir(), args.profile.profile_path.as_deref())?;
+    let style = style();
+
+    if args.thresholds {
+        list_thresholds(&loaded, args.json, &style);
+        return Ok(ExitCode::from(EXIT_OK));
+    }
+    if args.list || args.rule.is_none() {
+        list_rules(&loaded, args.json, &style);
+        return Ok(ExitCode::from(EXIT_OK));
+    }
+
+    let query = args.rule.expect("checked above");
+    let Some(doc) = lookup(&query) else {
+        eprintln!("error: unknown rule {query:?}. Run `aqs explain --list`.");
+        return Ok(ExitCode::from(EXIT_ERROR));
+    };
+
+    if args.json {
+        print_json(&one_rule_as_json(&loaded, doc));
+    } else {
+        render::render_explain(doc, &loaded, &style);
+    }
+    Ok(ExitCode::from(EXIT_OK))
+}
+
+fn current_dir() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn git_error(error: anyhow::Error) -> ExitCode {
+    eprintln!("git error: {error}");
+    ExitCode::from(EXIT_ERROR)
+}
+
 fn run() -> Result<ExitCode, ExitCode> {
-    let cli = Cli::parse();
-    match cli.command {
-        Command::Scan {
-            paths,
-            json,
-            guidance,
-            all,
-            limit,
-            min_score,
-            no_cache,
-            profile,
-        } => {
-            let targets = resolve_targets(paths)?;
-            let base = base_of(&targets);
-            let loaded = load(&base, profile.profile_path.as_deref())?;
-            let mut cache = open_cache(Some(&base), &loaded, !no_cache);
-            let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
-
-            if json {
-                let mut value = serde_json::to_value(&report).expect("serialisable");
-                if guidance {
-                    value
-                        .as_object_mut()
-                        .expect("report is an object")
-                        .insert("guidance".into(), guidance_for(&report));
-                }
-                print_json(&value);
-            } else {
-                render::render_scan(&report, &style(), limit, all);
-            }
-
-            if let Some(minimum) = min_score {
-                if report.score < minimum {
-                    if !json {
-                        eprintln!(
-                            "score {:.2} is below the required {:.2}",
-                            report.score, minimum
-                        );
-                    }
-                    return Ok(ExitCode::from(EXIT_GATE_FAILED));
-                }
-            }
-            Ok(ExitCode::from(EXIT_OK))
-        }
-
-        Command::Delta {
-            baseline,
-            staged,
-            max_drop,
-            merge_base,
-            json,
-            path,
-            profile,
-        } => {
-            let root = path.unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
-            let loaded = load(&root, profile.profile_path.as_deref())?;
-            let mut cache = open_cache(None, &loaded, false);
-            let report =
-                compute_delta(&root, &loaded, &baseline, staged, merge_base, cache.as_mut())
-                    .map_err(|error| {
-                        eprintln!("git error: {error}");
-                        ExitCode::from(EXIT_ERROR)
-                    })?;
-
-            if json {
-                print_json(&serde_json::to_value(&report).expect("serialisable"));
-            } else {
-                render::render_delta(&report, &style(), max_drop);
-            }
-
-            Ok(ExitCode::from(if report.score_change < -max_drop.abs() {
-                EXIT_GATE_FAILED
-            } else {
-                EXIT_OK
-            }))
-        }
-
-        Command::Gate {
-            against,
-            tolerance,
-            no_merge_base,
-            json,
-            path,
-            no_cache,
-            profile,
-        } => {
-            let root = path.unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            });
-            let loaded = load(&root, profile.profile_path.as_deref())?;
-            let repo_root = aqs::gitio::repo_root(&root).ok();
-            let mut cache = open_cache(repo_root.as_deref(), &loaded, !no_cache);
-            let report = compute_gate(
-                &root,
-                &loaded,
-                &against,
-                tolerance,
-                !no_merge_base,
-                cache.as_mut(),
-            )
-            .map_err(|error| {
-                eprintln!("git error: {error}");
-                ExitCode::from(EXIT_ERROR)
-            })?;
-
-            if json {
-                print_json(&serde_json::to_value(&report).expect("serialisable"));
-            } else {
-                render::render_gate(&report, &style());
-            }
-
-            Ok(ExitCode::from(if report.passed() { EXIT_OK } else { EXIT_GATE_FAILED }))
-        }
-
-        Command::Check { paths, fail_on_findings, profile } => {
-            let targets = resolve_targets(paths)?;
-            let base = base_of(&targets);
-            let loaded = load(&base, profile.profile_path.as_deref())?;
-            let mut cache = open_cache(None, &loaded, false);
-            let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
-            render::render_check(&report);
-
-            Ok(ExitCode::from(
-                if fail_on_findings && report.findings_count() > 0 {
-                    EXIT_GATE_FAILED
-                } else {
-                    EXIT_OK
-                },
-            ))
-        }
-
-        Command::Explain { rule, list, thresholds, json, profile } => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let loaded = load(&cwd, profile.profile_path.as_deref())?;
-            let style = style();
-
-            if thresholds {
-                if json {
-                    let map: Map<String, Value> = loaded
-                        .thresholds
-                        .iter()
-                        .map(|(key, value)| (key.clone(), json!(value)))
-                        .collect();
-                    print_json(&Value::Object(map));
-                } else {
-                    render::render_thresholds(&loaded, &style);
-                }
-                return Ok(ExitCode::from(EXIT_OK));
-            }
-
-            if list || rule.is_none() {
-                if json {
-                    let mut map = Map::new();
-                    for doc in RULE_DOCS {
-                        let mut threshold_map = Map::new();
-                        for key in doc.thresholds {
-                            threshold_map
-                                .insert((*key).to_string(), json!(loaded.threshold(key)));
-                        }
-                        map.insert(
-                            doc.category.to_string(),
-                            json!({
-                                "summary": doc.summary,
-                                "why": doc.why,
-                                "fix": doc.fix,
-                                "weight": loaded.rule(doc.category).weight,
-                                "thresholds": Value::Object(threshold_map),
-                            }),
-                        );
-                    }
-                    print_json(&Value::Object(map));
-                } else {
-                    render::render_rule_list(&loaded, &style);
-                }
-                return Ok(ExitCode::from(EXIT_OK));
-            }
-
-            let query = rule.expect("checked above");
-            let Some(doc) = lookup(&query) else {
-                eprintln!("error: unknown rule {query:?}. Run `aqs explain --list`.");
-                return Ok(ExitCode::from(EXIT_ERROR));
-            };
-
-            if json {
-                let mut threshold_map = Map::new();
-                for key in doc.thresholds {
-                    threshold_map.insert((*key).to_string(), json!(loaded.threshold(key)));
-                }
-                print_json(&json!({
-                    "category": doc.category,
-                    "summary": doc.summary,
-                    "why": doc.why,
-                    "fix": doc.fix,
-                    "thresholds": Value::Object(threshold_map),
-                }));
-            } else {
-                render::render_explain(doc, &loaded, &style);
-            }
-            Ok(ExitCode::from(EXIT_OK))
-        }
+    match Cli::parse().command {
+        Command::Scan(args) => run_scan(args),
+        Command::Delta(args) => run_delta(args),
+        Command::Gate(args) => run_gate(args),
+        Command::Check(args) => run_check(args),
+        Command::Explain(args) => run_explain(args),
     }
 }
 

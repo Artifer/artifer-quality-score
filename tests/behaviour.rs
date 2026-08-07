@@ -894,3 +894,31 @@ fn rust_impl_blocks_are_named_by_their_type() {
         .expect("fires");
     assert_eq!(finding.function.as_deref(), Some("Mixed"));
 }
+
+#[test]
+fn a_typoed_config_section_is_rejected() {
+    // An unknown rule name was already fatal, but an unknown *section* was silently
+    // ignored, so `"exclude_pattern"` or `"rule"` quietly did nothing. For a gate, a
+    // config that fails to apply is worse than one that refuses to load.
+    let root = scratch_tree(
+        "typo-section",
+        &[(".aqs.json", r#"{"rule":{"Complex Method":0.0}}"#)],
+    );
+    let error = aqs::profile::load_profile(&root, None).expect_err("must be rejected");
+    assert!(format!("{error}").contains("unknown config section"), "{error}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn underscore_prefixed_keys_are_comments() {
+    // JSON has no comments, so `_why` carries the rationale for an exemption.
+    let root = scratch_tree(
+        "comment-key",
+        &[(".aqs.json", r#"{"_why":{"a":"because"},"name":"documented"}"#)],
+    );
+    assert_eq!(
+        aqs::profile::load_profile(&root, None).expect("loads").name,
+        "documented"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

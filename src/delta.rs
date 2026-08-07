@@ -120,19 +120,24 @@ fn analyze_pair(
     (delta, old, new)
 }
 
-/// Score every changed file twice — at the baseline, and as it stands now.
-pub fn compute_delta(
-    root: &Path,
-    profile: &Profile,
-    baseline: &str,
-    staged: bool,
-    merge_base: bool,
-    _cache: &mut dyn Cache,
-) -> Result<DeltaReport> {
-    let repo = repo_root(root)?;
-    let resolved = resolve_baseline(&repo, baseline, merge_base)?;
-    let targets = changed_files(&repo, &resolved, staged)?;
+/// What to compare, and how. Six loose parameters at the call site is the smell this
+/// tool reports as Excess Number of Function Arguments.
+pub struct DeltaRequest<'a> {
+    pub root: &'a Path,
+    pub profile: &'a Profile,
+    pub baseline: &'a str,
+    pub staged: bool,
+    pub merge_base: bool,
+}
 
+/// Collect the baseline and current bytes for every changed file.
+fn pair_jobs(
+    repo: &Path,
+    resolved: &str,
+    request: &DeltaRequest,
+    targets: Vec<String>,
+) -> Result<Vec<PairJob>> {
+    let profile = request.profile;
     let candidates: Vec<(String, &'static str)> = targets
         .into_iter()
         .filter_map(|path| {
@@ -146,11 +151,11 @@ pub fn compute_delta(
     // branch diff that dominates everything else.
     let old_revisions: Vec<String> =
         candidates.iter().map(|(path, _)| format!("{resolved}:{path}")).collect();
-    let old_blobs = read_blobs(&repo, &old_revisions)?;
-    let staged_blobs = if staged {
+    let old_blobs = read_blobs(repo, &old_revisions)?;
+    let staged_blobs = if request.staged {
         let revisions: Vec<String> =
             candidates.iter().map(|(path, _)| format!(":{path}")).collect();
-        read_blobs(&repo, &revisions)?
+        read_blobs(repo, &revisions)?
     } else {
         Vec::new()
     };
@@ -158,26 +163,32 @@ pub fn compute_delta(
     let mut jobs: Vec<PairJob> = Vec::new();
     for (index, (path, language)) in candidates.iter().enumerate() {
         let old_source = old_blobs.get(index).cloned().flatten();
-        let new_source = if staged {
+        let new_source = if request.staged {
             staged_blobs.get(index).cloned().flatten()
         } else {
             let absolute = repo.join(path);
-            if absolute.is_file() {
-                std::fs::read(&absolute).ok()
-            } else {
-                None
-            }
+            absolute.is_file().then(|| std::fs::read(&absolute).ok()).flatten()
         };
         if old_source.is_none() && new_source.is_none() {
             continue;
         }
-        jobs.push(PairJob {
-            path: path.clone(),
-            language,
-            old_source,
-            new_source,
-        });
+        jobs.push(PairJob { path: path.clone(), language, old_source, new_source });
     }
+    Ok(jobs)
+}
+
+/// Score every changed file twice — at the baseline, and as it stands now.
+pub fn compute_delta(request: DeltaRequest, _cache: &mut dyn Cache) -> Result<DeltaReport> {
+    let DeltaRequest { root, profile, baseline, staged, merge_base } = request;
+    let repo = repo_root(root)?;
+    let resolved = resolve_baseline(&repo, baseline, merge_base)?;
+    let targets = changed_files(&repo, &resolved, staged)?;
+    let jobs = pair_jobs(
+        &repo,
+        &resolved,
+        &DeltaRequest { root, profile, baseline, staged, merge_base },
+        targets,
+    )?;
 
     let results: Vec<(FileDelta, Option<FileReport>, Option<FileReport>)> =
         jobs.par_iter().map(|job| analyze_pair(job, profile)).collect();
