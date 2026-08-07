@@ -55,16 +55,21 @@ to pin a version:
 PREFIX=/usr/local/bin ./install.sh v0.3.0
 ```
 
-macOS binaries are universal, so one download covers Apple Silicon and Intel. Linux
-x86_64 is built too; see [Cutting a new release](#cutting-a-new-release) for why arm64
-Linux is not.
+macOS binaries are universal, so one download covers Apple Silicon and Intel. Linux is
+built for both x86_64 and arm64.
 
-Manual download, if you would rather not pipe a script into a shell:
+Manual download, if you would rather not pipe a script into a shell. Every asset name
+embeds its version, so `releases/latest/download/` cannot be used without naming the
+version anyway — set it once:
 
 ```bash
-curl -fsSLO https://github.com/Artifer/artifer-quality-score/releases/latest/download/aqs-v0.3.0-macos-universal.tar.gz
+VERSION=v0.7.1   # or whichever release you want
+curl -fsSLO "https://github.com/Artifer/artifer-quality-score/releases/download/$VERSION/aqs-$VERSION-macos-universal.tar.gz"
 tar -xzf aqs-*.tar.gz && install -m 755 aqs ~/.local/bin/aqs
 ```
+
+Swap `macos-universal` for `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` on
+Linux. `SHA256SUMS` is published alongside; `install.sh` verifies it for you.
 
 ### From source
 
@@ -75,13 +80,22 @@ cargo install --path .         # or put it on your PATH
 
 ### Cutting a new release
 
-Bump `version` in `Cargo.toml`, then push a tag. `.github/workflows/release.yml`
-builds macOS (universal) and Linux x86_64, verifies each binary runs, and publishes
-the tarballs with checksums.
+Bump `version` in `Cargo.toml` **and refresh `Cargo.lock`** — the lock records the
+crate's own version, and the release builds with `--locked`, so a bump without a
+refreshed lock produces a tag that cannot be built at all. `v0.4.1` and `v0.6.2` were
+lost that way before a preflight check existed to catch it:
 
 ```bash
-git tag v0.3.1 && git push --tags
+cargo check                      # refreshes Cargo.lock after the bump
+git commit -am "Release v0.7.2"
+git tag v0.7.2 && git push origin master --tags
 ```
+
+`.github/workflows/release.yml` first runs a preflight that rejects a tag disagreeing
+with `Cargo.toml` or a stale lock, then builds macOS (universal), Linux x86_64 and Linux
+arm64, verifies each binary runs, and publishes the tarballs with checksums. CI
+(`ci.yml`) checks the same lock invariant on every push, so this should never reach a
+tag.
 
 Remember that a version bump invalidates every cached score, deliberately — the tool
 version is part of the cache key so that a scoring change cannot be served from a

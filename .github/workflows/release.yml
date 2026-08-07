@@ -2,12 +2,14 @@
 #
 #   git tag v0.3.1 && git push --tags
 #
-# Produces a universal macOS binary (arm64 + x86_64 via lipo) and Linux x86_64, each
-# as a tarball containing a single `aqs` executable, plus SHA256SUMS.
+# Produces a universal macOS binary (arm64 + x86_64 via lipo), Linux x86_64 and Linux
+# arm64, each as a tarball containing a single `aqs` executable, plus SHA256SUMS.
 #
-# Linux arm64 is not built here: GitHub's arm64 runners are billed for private
-# repositories, and no one on the team needs it yet. Add `ubuntu-24.04-arm` to the
-# matrix if that changes.
+# The three labels must stay in step with the `uname` mapping in install.sh: the
+# installer builds an asset name from them, so a platform missing here becomes a 404 at
+# install time rather than a build failure here. Linux arm64 was originally skipped
+# because arm64 runners are billed for private repositories — moot now the repo is
+# public, and the installer was already advertising the asset.
 
 name: Release
 
@@ -64,6 +66,9 @@ jobs:
           - os: ubuntu-latest
             label: x86_64-unknown-linux-gnu
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            label: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
