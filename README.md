@@ -435,50 +435,50 @@ such.
 
 ## Scoring itself
 
-`aqs` scores this repository, and the result is worth reading as a worked example of
-what the metric is and is not good for.
+`aqs` scores this repository, with **no `.aqs.json` and no exempted rules**:
 
 ```
-aqs scan src tests examples        10.00 / 10   20 files · 5,376 LoC · 0 findings
+aqs scan src tests examples        10.00 / 10   49 files · 5,594 LoC · 0 findings
 ```
 
 It did not start there. The first self-scan was **6.23**, and the findings were real:
 
-| | Finding | Verdict |
+| | Finding | Fix |
 | --- | --- | --- |
-| `load_profile` | Brain Method — 90 lines, cc 21, nesting 5 | true, now four named steps |
-| `run` | 190 lines, cc 26 | true, now one handler per subcommand |
-| `constructor_over_injection` | 98% similar to `excess_arguments` | true, now one detector |
-| `find_longest_match` | cc 14, nesting 4 | true, flattened without touching the algorithm |
+| `load_profile` | Brain Method — 90 lines, cc 21, nesting 5 | four named steps |
+| `run` | 190 lines, cc 26 | one handler per subcommand, each taking an `Args` struct |
+| `constructor_over_injection` | 98% similar to `excess_arguments` | one `argument_count` detector |
+| `find_longest_match` | cc 14, nesting 4 | DP row extracted; parity tests unchanged |
+| `compute_delta`, `compute_gate` | six arguments each | `DeltaRequest`, `GateRequest` |
+| difflib's `(alo, ahi, blo, bhi)` | four bare indices | a `Window` of two ranges |
+| `Profile`'s pattern predicates | Low Cohesion | matching moved onto `PatternSet`, where it belongs |
+| `metrics.rs`, `detectors.rs`, `render.rs`, `profile.rs`, `cache.rs`, `main.rs` | 21-54 functions each, 560-660 lines | split into module directories along what each part measures |
 
-Getting from 6.23 to 9.20 was **all refactoring**, and the code is better for it. The
-last 0.8 was not, and the reason is the interesting part.
+The module split is the interesting one, because it resolved what looked like a wall.
+**Two rules pull against each other**: Bumpy Road and Large Method ask you to extract
+functions, and Number of Functions counts them — extracting `function_name` into three
+helpers removed one finding and added another. That tension is real, but it is *local*.
+Splitting the module satisfies both at once, and the resulting layout is easier to
+navigate than the 735-line original. There was no wall, only a reorganisation I had been
+avoiding.
 
-**Two rules pull against each other.** Bumpy Road and Large Method ask you to extract
-functions; Number of Functions in a Single Module counts them. Splitting `function_name`
-into three named helpers removed its Bumpy Road finding and took `metrics.rs` from 52
-functions to 54. Extracting `matches_before`/`matches_after` from difflib removed a
-Bumpy Road and created two Primitive Obsession findings, because a search window is four
-byte indices however you package it.
+Three things worth knowing about the result:
 
-Past that point you are trading one finding for another, not improving the code. So four
-rules are switched off in [`.aqs.json`](.aqs.json) — and only four — each with its
-reasoning recorded in the file:
+- **Nothing is exempted.** An earlier version of this section justified four disabled
+  rules. All four turned out to be reachable by refactoring, so the config is gone.
+- **The refactor is verified behaviour-preserving.** Every change was checked by scoring
+  nine real repositories with the previous release and diffing the findings, not just the
+  scores. Two regressions surfaced that way and were fixed: excluding accessors from
+  *connectivity* as well as from counting could raise LCOM4 by removing the link that
+  held a class together, and a `super()` delegation that computes an argument
+  (`super().update(deleted_at=timezone.now())`) was no longer recognised as a delegation,
+  which flagged a perfectly cohesive Django QuerySet.
+- **The last finding was in the tests.** Two of them were 95% structurally similar; the
+  fix was to make them table-driven, which is what the rule asks for.
 
-- **Number of Functions in a Single Module** and **Lines of Code in a Single File**:
-  `metrics.rs` is 54 measurement primitives, `detectors.rs` is 34. They are catalogues,
-  and splitting them on no principle would scatter cohesive code.
-- **Low Cohesion**: fires on `Profile` and `GateReport`, a config object and a report
-  struct whose predicates each consult a different field by design. The known LCOM4
-  blind spot for data objects.
-- **Primitive Obsession**: fires on small Rust helpers taking `usize` indices, which is
-  the vocabulary of that language rather than a design failure.
-
-**A 10.00 with four rules disabled is not the same claim as a 10.00 without.** That is
-why the exemptions live in a file you can read, why unknown rule *and* section names are
-hard errors, and why the profile name (`aqs-self`) is printed in the header of every
-report. If you point a model at this metric, expect it to find this same wall — and
-prefer a documented exemption to a contorted refactor when it does.
+If you point a model at this metric, the lesson is the one above: prefer the
+reorganisation you have been avoiding to a contorted local refactor, and verify against a
+real corpus rather than against the score.
 
 ## Provenance
 

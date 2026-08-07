@@ -194,9 +194,6 @@ impl GateReport {
         self.score_change >= -self.tolerance.abs()
     }
 
-    pub fn regressions(&self) -> impl Iterator<Item = &FileDelta> {
-        self.files.iter().filter(|f| f.score_change < 0.0)
-    }
 }
 
 /// LoC-weighted mean, so a 3000-line mess is not offset by ten clean stubs.

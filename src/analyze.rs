@@ -267,7 +267,7 @@ fn as_posix(path: &Path) -> String {
 /// Whether a file is in a supported language and not excluded.
 fn is_scannable(path: &Path, profile: &Profile) -> bool {
     let shown = as_posix(path);
-    spec_for_path(&shown).is_some() && !profile.is_excluded(&shown)
+    spec_for_path(&shown).is_some() && !profile.exclude_patterns.matches(&shown)
 }
 
 /// Whether to descend into a directory.
@@ -279,7 +279,7 @@ fn keep_directory(entry: &walkdir::DirEntry, profile: &Profile) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return true;
     }
-    !profile.is_excluded(&as_posix(entry.path()))
+    !profile.exclude_patterns.matches(&as_posix(entry.path()))
 }
 
 /// Every supported, non-excluded file under `roots`, in sorted order.

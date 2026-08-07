@@ -688,7 +688,7 @@ fn production_code_is_not_mistaken_for_tests() {
     let profile = Profile::default();
     for path in ["src/latest.ts", "apps/core/models.py", "src/contest/rules.ts",
                  "src/e2e_helpers/util.ts", "src/protest.py"] {
-        assert!(!profile.is_test_path(path), "{path} is not test code");
+        assert!(!profile.test_patterns.matches(path), "{path} is not test code");
     }
 }
 
@@ -921,4 +921,59 @@ fn underscore_prefixed_keys_are_comments() {
         "documented"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn methods_that_say_nothing_about_cohesion_are_excluded() {
+    // Each case is a class LCOM4 would condemn if the corresponding exemption were
+    // missing, and each exemption exists for a different reason.
+    let cases = [
+        (
+            // An accessor is not a responsibility of its own, but reading two fields is
+            // real evidence they belong together. Excluding it from connectivity as well
+            // as from counting would *raise* LCOM4 by removing the link.
+            "accessor connects the fields it reads",
+            "class Money:\n\
+             \x20   def total(self):\n\
+             \x20       return self.net + self.tax\n\
+             \x20   def bump_net(self, v):\n\
+             \x20       self.net = compute(v)\n\
+             \x20   def bump_tax(self, v):\n\
+             \x20       self.tax = compute(v)\n",
+        ),
+        (
+            // `return super().update(deleted_at=timezone.now())` delegates even though it
+            // computes an argument on the way. Demanding a call-free statement counted it
+            // as its own responsibility and flagged a cohesive Django QuerySet.
+            "super() delegation that computes an argument",
+            "class SoftDeleteQuerySet(models.QuerySet):\n\
+             \x20   def delete(self):\n\
+             \x20       return super().update(deleted_at=timezone.now())\n\
+             \x20   def hard_delete(self):\n\
+             \x20       return super().delete()\n\
+             \x20   def alive(self):\n\
+             \x20       return self.filter(deleted_at__isnull=True)\n\
+             \x20   def dead(self):\n\
+             \x20       return self.filter(deleted_at__isnull=False)\n",
+        ),
+        (
+            // A value object of getters is not six unrelated jobs.
+            "value object of accessors",
+            "class Config:\n\
+             \x20   def timeout(self):\n\
+             \x20       return self._timeout\n\
+             \x20   def retries(self):\n\
+             \x20       return self._retries\n\
+             \x20   def host(self):\n\
+             \x20       return self._host\n",
+        ),
+    ];
+    for (label, source) in cases {
+        let report = py(source);
+        assert!(
+            !categories(&report).contains(prof::LOW_COHESION),
+            "{label}: {:?}",
+            report.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
+        );
+    }
 }

@@ -142,7 +142,7 @@ fn pair_jobs(
         .into_iter()
         .filter_map(|path| {
             spec_for_path(&path).and_then(|spec| {
-                (!profile.is_excluded(&path)).then_some((path, spec.name))
+                (!profile.exclude_patterns.matches(&path)).then_some((path, spec.name))
             })
         })
         .collect();

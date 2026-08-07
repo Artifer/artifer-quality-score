@@ -177,7 +177,7 @@ pub fn tree_paths(repo: &Path, revision: &str, profile: &Profile) -> Result<Vec<
     let mut paths: Vec<String> = raw
         .split('\0')
         .filter(|entry| !entry.is_empty())
-        .filter(|path| spec_for_path(path).is_some() && !profile.is_excluded(path))
+        .filter(|path| spec_for_path(path).is_some() && !profile.exclude_patterns.matches(path))
         .map(String::from)
         .collect();
     paths.sort();
