@@ -28,6 +28,24 @@ pub struct AnalysisJob {
     pub source: Vec<u8>,
 }
 
+impl AnalysisJob {
+    /// A job for one file's bytes.
+    ///
+    /// Every reader of source — the filesystem walk and the git tree alike — builds
+    /// its jobs here, so a file is prepared the same way whichever it came from. A
+    /// Vue SFC is reduced to its script block, in place, and may resolve to a
+    /// different language than its extension suggested; everything else is taken
+    /// as it is.
+    pub fn new(path: String, spec: &LanguageSpec, source: Vec<u8>) -> Self {
+        if !crate::vue::is_vue(&path) {
+            return Self { path, language: spec.name, source };
+        }
+
+        let script = crate::vue::extract(&source);
+        Self { path, language: script.language, source: script.source }
+    }
+}
+
 fn count_syntax_errors(root: &Node) -> usize {
     if !root.has_error() {
         return 0;
@@ -331,11 +349,7 @@ pub fn scan(
         let spec = spec_for_path(&path.to_string_lossy().replace('\\', "/"))
             .expect("discover filtered on this");
         match std::fs::read(path) {
-            Ok(source) => jobs.push(AnalysisJob {
-                path: shown,
-                language: spec.name,
-                source,
-            }),
+            Ok(source) => jobs.push(AnalysisJob::new(shown, spec, source)),
             Err(error) => unreadable.push(FileReport::unsupported(
                 shown,
                 spec.name.to_string(),

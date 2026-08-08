@@ -11,7 +11,7 @@ use std::path::PathBuf;
 #[command(
     name = "aqs",
     version = VERSION,
-    about = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript and Rust."
+    about = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust and Vue."
 )]
 pub struct Cli {
     #[command(subcommand)]

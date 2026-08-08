@@ -1,8 +1,9 @@
 # Artifer Quality Score
 
 A deterministic, explainable code quality score for Python, TypeScript, JavaScript
-and Rust. One number per file from 1.0 to 10.0, with every deducted point
-traceable to a named code smell at a specific line.
+and Rust, plus the `<script>` block of Vue single-file components. One number per
+file from 1.0 to 10.0, with every deducted point traceable to a named code smell at
+a specific line.
 
 A single static binary — no runtime to install in the repository being scored,
 which matters for Node-only frontend pipelines.
@@ -607,6 +608,7 @@ The architecture keeps detection and scoring strictly separate:
 | Module | Responsibility |
 | --- | --- |
 | `languages` | per-language AST vocabulary — add a language here, no detector changes |
+| `vue` | reduces a single-file component to its script, in place |
 | `metrics` | AST measurement primitives (complexity, nesting, bumps, LoC) |
 | `detectors` | the rule catalogue; reports measurements, knows nothing about points |
 | `profile` | thresholds and weights — the entire scoring policy |

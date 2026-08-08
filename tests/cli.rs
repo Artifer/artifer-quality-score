@@ -819,3 +819,191 @@ fn directives_work_in_every_comment_style() {
         );
     }
 }
+
+// --------------------------------------------------------------------------- //
+// Vue single-file components
+// --------------------------------------------------------------------------- //
+
+/// An SFC whose script holds one deeply nested function, preceded by a template
+/// long enough that a mis-mapped line number is unmistakable.
+fn sfc(lang: &str) -> String {
+    let filler: String = (0..20).map(|i| format!("    <p>row {i}</p>\n")).collect();
+    format!(
+        "<template>\n{filler}</template>\n\n<script{lang}>\nexport default {{\n    methods: {{\n        tally(a, b, c) {{\n            let total = 0\n            if (a) {{\n                for (const i of b) {{\n                    while (i) {{\n                        if (i && a || c) {{\n                            for (const j of b) {{\n                                if (j) total += j\n                            }}\n                        }}\n                    }}\n                }}\n            }}\n            return total\n        }},\n    }},\n}}\n</script>\n\n<style scoped>\np {{ color: red; }}\n</style>\n"
+    )
+}
+
+#[test]
+fn scan_scores_the_script_of_a_single_file_component() {
+    let tree = Tree::new("vue-scan", &[("Player.vue", &sfc(""))]);
+
+    let run = aqs(&[
+        "scan",
+        tree.path().to_str().unwrap(),
+        "--json",
+        "--no-cache",
+    ]);
+    assert_eq!(run.code, EXIT_OK, "{}", run.stderr);
+
+    let file = &run.json()["files"][0];
+    assert_eq!(file["path"], "Player.vue");
+    assert_eq!(file["language"], "javascript");
+    assert!(
+        !file["function_level_code_smells"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "the nested method should be flagged: {}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_finding_points_at_the_line_of_the_vue_file() {
+    let tree = Tree::new("vue-lines", &[("Player.vue", &sfc(""))]);
+
+    let run = aqs(&["check", tree.path().to_str().unwrap()]);
+    assert_eq!(run.code, EXIT_OK, "{}", run.stderr);
+
+    // Every line is where the .vue file has it: the method is declared on line 27
+    // (22 template lines, a blank, the script tag, and two lines of object), and
+    // the conditional it is flagged for is five lines further down. A finding that
+    // pointed at the script's own line 4 would be useless to whoever opens the file.
+    let reported = run.stdout.trim();
+    assert!(
+        reported.contains("Player.vue:27:9: Deep, Nested Complexity"),
+        "a function-level finding belongs on the function's line: {reported}"
+    );
+    assert!(
+        reported.contains("Player.vue:32:28: Complex Conditional"),
+        "an expression-level finding belongs on the expression's line: {reported}"
+    );
+}
+
+#[test]
+fn a_typescript_block_is_scored_as_typescript() {
+    let tree = Tree::new("vue-ts", &[("Player.vue", &sfc(" setup lang=\"ts\""))]);
+
+    let run = aqs(&[
+        "scan",
+        tree.path().to_str().unwrap(),
+        "--json",
+        "--no-cache",
+    ]);
+
+    assert_eq!(
+        run.json()["files"][0]["language"],
+        "typescript",
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn only_the_script_counts_as_lines_of_code() {
+    let script = "<script>\nexport const a = 1\n</script>\n";
+    let padded = format!(
+        "<template>\n{}</template>\n{script}<style>\n{}</style>\n",
+        (0..400)
+            .map(|i| format!("    <p>row {i}</p>\n"))
+            .collect::<String>(),
+        (0..400)
+            .map(|i| format!("p {{ margin: {i}px; }}\n"))
+            .collect::<String>(),
+    );
+    let tree = Tree::new("vue-loc", &[("Big.vue", &padded)]);
+
+    let run = aqs(&[
+        "scan",
+        tree.path().to_str().unwrap(),
+        "--json",
+        "--no-cache",
+    ]);
+
+    // 800 lines of markup and css, one line of code — and no "file too long".
+    assert_eq!(run.json()["files"][0]["loc"], 1, "{}", run.stdout);
+    assert_eq!(run.json()["score"], 10.0);
+}
+
+/// A component with nothing to score is an empty file, not a broken one — and is
+/// treated exactly as an empty `.js` is, rather than as a case of its own.
+#[test]
+fn a_component_without_a_script_is_scored_as_empty() {
+    let tree = Tree::new(
+        "vue-empty",
+        &[
+            ("Static.vue", "<template>\n    <p>hi</p>\n</template>\n"),
+            ("empty.js", ""),
+        ],
+    );
+
+    let run = aqs(&[
+        "scan",
+        tree.path().to_str().unwrap(),
+        "--json",
+        "--no-cache",
+    ]);
+    assert_eq!(run.code, EXIT_OK, "{}", run.stderr);
+
+    let files = run.json();
+    let sfc = &files["files"][0];
+    let empty = &files["files"][1];
+    assert_eq!(sfc["path"], "Static.vue");
+    assert!(
+        sfc["error"].is_null(),
+        "a template-only component is not an error: {}",
+        run.stdout
+    );
+    assert_eq!(sfc["loc"], empty["loc"]);
+    assert_eq!(sfc["score"], empty["score"]);
+}
+
+/// An SFC whose script declares a lot and does little — the wiring container
+/// shape: one computed getter per value it forwards from the store.
+fn wiring_component(getters: usize, methods: usize) -> String {
+    let computed: String = (0..getters)
+        .map(|i| format!("        value{i}() {{ return this.$store.getters['p/value{i}'] }},\n"))
+        .collect();
+    let handlers: String = (0..methods).map(|i| format!("        go{i}() {{}},\n")).collect();
+
+    format!(
+        "<template>\n    <p/>\n</template>\n\n<script>\nexport default {{\n    computed: {{\n{computed}    }},\n\n    methods: {{\n{handlers}    }},\n}}\n</script>\n"
+    )
+}
+
+#[test]
+fn a_component_is_counted_on_what_it_does_not_on_what_it_declares() {
+    // Thirty getters forwarding to the store is a wiring layer, not a god
+    // component: the reader holds three procedures, not thirty-three.
+    let tree = Tree::new("vue-count", &[("Wiring.vue", &wiring_component(30, 3))]);
+
+    let run = aqs(&["scan", tree.path().to_str().unwrap(), "--json", "--no-cache"]);
+
+    assert_eq!(run.json()["files"][0]["file_level_code_smells"], serde_json::json!([]));
+}
+
+#[test]
+fn a_component_with_too_much_behaviour_is_still_flagged() {
+    let tree = Tree::new("vue-count-bad", &[("God.vue", &wiring_component(3, 30))]);
+
+    let run = aqs(&["scan", tree.path().to_str().unwrap(), "--json", "--no-cache"]);
+
+    let smell = &run.json()["files"][0]["file_level_code_smells"][0];
+    assert_eq!(smell["category"], "Number of Functions in a Single Module");
+    // The wording names what was counted, so the number can be reproduced by
+    // counting the same things.
+    assert_eq!(smell["details"], "30 methods and handlers");
+}
+
+#[test]
+fn a_plain_module_is_still_counted_on_every_function() {
+    let functions: String = (0..25).map(|i| format!("export const f{i} = () => {i}\n")).collect();
+    let tree = Tree::new("js-count", &[("helpers.js", &functions)]);
+
+    let run = aqs(&["scan", tree.path().to_str().unwrap(), "--json", "--no-cache"]);
+
+    assert_eq!(
+        run.json()["files"][0]["file_level_code_smells"][0]["details"],
+        "25 functions"
+    );
+}

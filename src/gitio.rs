@@ -206,7 +206,7 @@ pub fn scan_revision(
         for (path, blob) in chunk.iter().zip(blobs) {
             let Some(source) = blob else { continue };
             let spec = spec_for_path(path).expect("tree_paths already filtered on this");
-            jobs.push(AnalysisJob { path: path.clone(), language: spec.name, source });
+            jobs.push(AnalysisJob::new(path.clone(), spec, source));
         }
         reports.extend(analyze_jobs(&jobs, profile, cache));
     }

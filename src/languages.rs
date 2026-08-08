@@ -269,9 +269,12 @@ pub fn specs() -> &'static [LanguageSpec; 4] {
                 &[".ts", ".tsx", ".mts", ".cts"],
                 || tree_sitter_typescript::LANGUAGE_TSX.into(),
             ),
+            // `.vue` resolves here so a single-file component is discovered at
+            // all; whether its script is JavaScript or TypeScript is decided from
+            // the block's own `lang` attribute when the file is read (`vue.rs`).
             typescript_like(
                 "javascript",
-                &[".js", ".jsx", ".mjs", ".cjs"],
+                &[".js", ".jsx", ".mjs", ".cjs", ".vue"],
                 || tree_sitter_javascript::LANGUAGE.into(),
             ),
             rust_spec(),
@@ -310,6 +313,7 @@ mod tests {
         assert_eq!(spec_for_path("a/b.tsx").unwrap().name, "typescript");
         assert_eq!(spec_for_path("a/b.ts").unwrap().name, "typescript");
         assert_eq!(spec_for_path("a/b.mjs").unwrap().name, "javascript");
+        assert_eq!(spec_for_path("a/b.vue").unwrap().name, "javascript");
         assert_eq!(spec_for_path("a/b.rs").unwrap().name, "rust");
         assert!(spec_for_path("a/b.go").is_none());
         assert!(spec_for_path("Makefile").is_none());

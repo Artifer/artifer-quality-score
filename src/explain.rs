@@ -137,8 +137,8 @@ pub const RULE_DOCS: &[RuleDoc] = &[
     RuleDoc {
         category: prof::FUNCTION_COUNT,
         summary: "A module declaring a large number of functions.",
-        why: "Past a certain count a module stops being a unit with a purpose and becomes a bag of utilities, which is where code goes to be forgotten and reimplemented.",
-        fix: "Group the functions that share vocabulary or state into their own module, or into a class if they share state.",
+        why: "Past a certain count a module stops being a unit with a purpose and becomes a bag of utilities, which is where code goes to be forgotten and reimplemented. A Vue single-file component is counted on what runs — its methods, watchers and lifecycle hooks — and not on what only describes it (props, computed, data): a container forwarding thirty store values through thirty one-line getters holds no more behaviour than one forwarding three.",
+        fix: "Group the functions that share vocabulary or state into their own module, or into a class if they share state. In a Vue component that usually means lifting a cluster of methods into a composable.",
         thresholds: &["module_max_functions"],
     },
     RuleDoc {

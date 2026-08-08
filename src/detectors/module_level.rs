@@ -94,13 +94,34 @@ pub(crate) fn declaration_size(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     }
 }
 
+/// How many functions a reader has to hold, and what to call them in the report.
+///
+/// A Vue component is counted on what runs — its methods, watchers and lifecycle
+/// hooks — and not on what merely describes it. See `vue::DECLARATIVE_OPTIONS`
+/// for why, and note the wording changes with the count so the number stays one
+/// a reader can reproduce by counting the same things.
+fn counted_functions(ctx: &FileContext) -> (usize, &'static str) {
+    if !crate::vue::is_vue(&ctx.path) {
+        return (ctx.functions.len(), "functions");
+    }
+
+    let declarative = crate::vue::declarative_ranges(&ctx.root, ctx.source);
+    let behaviour = ctx
+        .functions
+        .iter()
+        .filter(|f| !crate::vue::within(&declarative, f.node.start_byte()))
+        .count();
+
+    (behaviour, "methods and handlers")
+}
+
 pub(crate) fn function_count(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     let threshold = ctx.size_threshold("module_max_functions");
-    let count = ctx.functions.len();
+    let (count, noun) = counted_functions(ctx);
     if (count as f64) > threshold {
         out.push(RawFinding {
             category: prof::FUNCTION_COUNT,
-            details: format!("{count} functions"),
+            details: format!("{count} {noun}"),
             range: Range::line(1),
             value: count as f64,
             threshold,

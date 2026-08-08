@@ -28,5 +28,6 @@ pub mod profile;
 pub mod render;
 pub mod scoring;
 pub mod explain;
+pub mod vue;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

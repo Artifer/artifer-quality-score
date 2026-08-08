@@ -1,9 +1,9 @@
 [package]
 name = "aqs"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.80"
-description = "Deterministic, explainable code quality scoring for Python, TypeScript and JavaScript"
+description = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust and Vue"
 
 [[bin]]
 name = "aqs"
