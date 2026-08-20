@@ -14,10 +14,8 @@
 //! | [`explain`] | `explain`, `--list`, `--thresholds` |
 //! | [`check`] | lint-style lines |
 
-use crate::explain::{RuleDoc, RULE_DOCS};
-use crate::models::{
-    DeltaReport, FileDelta, FileReport, Finding, GateReport, ScanReport,
-};
+use crate::explain::{RuleDoc, OBSERVATION_DOCS, RULE_DOCS};
+use crate::models::{DeltaReport, FileDelta, FileReport, Finding, GateReport, ScanReport};
 use crate::profile::Profile;
 
 pub mod check;
@@ -39,6 +37,6 @@ pub use style::Style;
 use delta::{delta_heading, delta_rows};
 use layout::{file_findings, finding_line, Layout, GAP, INDENT, PENALTY_WIDTH};
 use style::{
-    fit, number, print_title, score_colour, thousands, wrap, BOLD, CYAN, DIM, GREEN, MAGENTA,
-    RED, YELLOW,
+    fit, number, print_title, score_colour, thousands, wrap, BOLD, CYAN, DIM, GREEN, MAGENTA, RED,
+    YELLOW,
 };

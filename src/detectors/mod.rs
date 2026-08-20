@@ -9,6 +9,7 @@
 //! | [`context`] | the shared per-file measurements, not a rule |
 //! | [`function_level`] | Complex Method, Large Method, Deep Nesting, Bumpy Road, Complex Conditional, argument counts, Brain Method, the type smells |
 //! | [`module_level`] | Code Duplication, file and declaration size, function count, Overall Code Complexity |
+//! | [`blocks`] | Duplicated Block |
 //! | [`test_level`] | Large and Duplicated Assertion Blocks |
 //! | [`cohesion`] | Low Cohesion, Brain Class |
 //!
@@ -25,6 +26,7 @@ use crate::profile::{self as prof, Profile};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
+pub mod blocks;
 pub mod cohesion;
 pub mod context;
 pub mod function_level;
@@ -33,6 +35,7 @@ pub mod test_level;
 
 pub use context::{FileContext, FunctionContext, RawFinding};
 
+use blocks::duplicated_block;
 use cohesion::{brain_class, low_cohesion};
 use context::{percent, signature_range};
 use function_level::{
@@ -92,6 +95,7 @@ pub fn detect(ctx: &FileContext) -> (Vec<RawFinding>, Vec<Suppression>) {
     let mut findings = Vec::new();
 
     code_duplication(ctx, &mut findings);
+    duplicated_block(ctx, &mut findings);
     large_assertion_blocks(ctx, &mut findings);
     duplicated_assertion_blocks(ctx, &mut findings);
     file_size(ctx, &mut findings);

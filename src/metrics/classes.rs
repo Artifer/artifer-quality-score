@@ -6,6 +6,7 @@
 //! LCOM4 — otherwise the metric condemns value objects and ABCs for existing.
 
 use crate::languages::LanguageSpec;
+use std::collections::HashSet;
 use tree_sitter::Node;
 
 #[allow(unused_imports)]
@@ -20,14 +21,16 @@ pub(crate) const ABSTRACT_DECORATORS: &[&str] = &["abstractmethod", "abstractpro
 pub fn class_nodes<'tree>(root: &Node<'tree>, spec: &LanguageSpec) -> Vec<Node<'tree>> {
     all_nodes(root)
         .into_iter()
-        .filter(|node| spec.class_nodes.contains(node.kind()) && node.id() != root.id())
+        .filter(|node| is_kind(node, &spec.class_nodes) && node.id() != root.id())
         .collect()
 }
 
 /// A body that is only a docstring, `pass`, `...`, or NotImplementedError.
 pub(crate) fn has_stub_body(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
+    // No body at all is the most stubbed a method can be: a TypeScript overload
+    // signature, or Ruby's `def print_class(*) end` null object.
     let Some(body) = function_body(node, spec) else {
-        return false;
+        return true;
     };
     for statement in named_children(&body) {
         if is_comment(&statement) || is_docstring(&statement) {
@@ -75,6 +78,11 @@ pub(crate) fn is_super_call(node: &Node, source: &[u8]) -> bool {
 /// reject it and count the method as a responsibility of its own — which is how a
 /// perfectly cohesive Django QuerySet ends up flagged.
 pub(crate) fn delegates_to_super(statement: &Node, source: &[u8]) -> bool {
+    // Ruby's bare `super` forwards the arguments it was given and is a node of its own,
+    // which is the one form no prefix would catch without also catching `superuser`.
+    if statement.kind() == "super" {
+        return true;
+    }
     let body = text(statement, source).trim_start();
     body.starts_with("return super()")
         || body.starts_with("super()")
@@ -86,7 +94,8 @@ pub(crate) fn delegates_to_super(statement: &Node, source: &[u8]) -> bool {
 ///
 /// One statement, no branching, and either it delegates to the superclass or it contains
 /// no calls at all and touches a field of `self`:
-/// `fn threshold(&self) -> f64 { self.thresholds[key] }`, `return self.amount * 2`.
+/// `fn threshold(&self) -> f64 { self.thresholds[key] }`, `return self.amount * 2`,
+/// `long getAmount() { return amount; }`.
 ///
 /// LCOM4 counts every method touching a distinct field as its own component, so a value
 /// object with six accessors scores 6 and reads as six unrelated jobs. Splitting it would
@@ -96,7 +105,12 @@ pub(crate) fn delegates_to_super(statement: &Node, source: &[u8]) -> bool {
 /// load-bearing. `self.orders.append(o)` and `len(self.orders)` both call something, so a
 /// class that merely appends to two different collections is still correctly condemned —
 /// that is real low cohesion, not an accessor.
-pub fn is_pure_accessor(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
+pub fn is_pure_accessor(
+    node: &Node,
+    spec: &LanguageSpec,
+    source: &[u8],
+    declared: &HashSet<String>,
+) -> bool {
     let Some(statement) = sole_statement(node, spec) else {
         return false;
     };
@@ -106,22 +120,36 @@ pub fn is_pure_accessor(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool
 
     let mut touches_state = false;
     for current in own_nodes(&statement, spec, source) {
-        let kind = current.kind();
-        if spec.nesting_nodes.contains(kind) || spec.decision_nodes.contains(kind) {
+        if is_kind(&current, &spec.nesting_nodes) || is_kind(&current, &spec.decision_nodes) {
             return false;
         }
-        let is_call = matches!(
-            kind,
-            "call" | "call_expression" | "macro_invocation" | "await_expression" | "await"
-        );
-        if is_call && !is_super_call(&current, source) {
-            return false;
-        }
-        if is_call || matches!(kind, "attribute" | "member_expression" | "field_expression") {
+        if is_call(&current) {
+            if !is_super_call(&current, source) {
+                return false;
+            }
             touches_state = true;
+            continue;
         }
+        touches_state |= reads_instance_state(&current, spec, source, declared);
     }
     touches_state
+}
+
+/// Whether a node reads a field of the object the method is running on.
+///
+/// Three spellings: a receiver plus a member (`self.amount`, `this.amount`), a node that
+/// is the field (Ruby's `@amount`), and a bare name that the class declared as a field,
+/// which is how Java, PHP and Ruby all let you reach one.
+fn reads_instance_state(
+    node: &Node,
+    spec: &LanguageSpec,
+    source: &[u8],
+    declared: &HashSet<String>,
+) -> bool {
+    if FIELD_ACCESS_NODES.contains(&node.kind()) || is_kind(node, &spec.instance_field_nodes) {
+        return true;
+    }
+    node.kind() == "identifier" && declared.contains(text(node, source))
 }
 
 /// Whether the class declares an abstract base such as `ABC` or `Protocol`.
@@ -149,6 +177,11 @@ pub(crate) fn has_abstract_decorator(node: &Node, source: &[u8]) -> bool {
 }
 
 /// Whether every method in the class is a body-less stub.
+///
+/// The constructor does not count: it is setup, not behaviour. A null object that
+/// remembers its arguments and then does nothing at all -- `def print_class(*) end`,
+/// nine times over -- is still an interface, and telling its author it has nine
+/// unrelated responsibilities is telling them to stop writing null objects.
 pub(crate) fn is_all_stubs(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     let Some(body) = node.child_by_field_name("body") else {
         return false;
@@ -156,7 +189,9 @@ pub(crate) fn is_all_stubs(node: &Node, spec: &LanguageSpec, source: &[u8]) -> b
     let methods: Vec<Node> = all_nodes(&body)
         .into_iter()
         .filter(|child| {
-            spec.function_nodes.contains(child.kind()) && function_name(child, source).is_some()
+            is_kind(child, &spec.function_nodes)
+                && function_name(child, source)
+                    .is_some_and(|name| !is_constructor(child, &name, spec))
         })
         .collect();
     !methods.is_empty() && methods.iter().all(|m| has_stub_body(m, spec, source))

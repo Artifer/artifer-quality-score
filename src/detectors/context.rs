@@ -5,6 +5,23 @@
 
 use super::*;
 
+/// Byte ranges of `#[cfg(test)]` modules.
+///
+/// The attribute is a *preceding sibling* of the module it decorates, not a child.
+fn cfg_test_ranges(root: &Node, source: &[u8]) -> Vec<(usize, usize)> {
+    metrics::all_nodes(root)
+        .iter()
+        .filter(|node| node.kind() == "mod_item")
+        .filter(|node| {
+            node.prev_named_sibling().is_some_and(|previous| {
+                let text = metrics::text(&previous, source);
+                previous.kind() == "attribute_item" && text.contains("cfg") && text.contains("test")
+            })
+        })
+        .map(|node| (node.start_byte(), node.end_byte()))
+        .collect()
+}
+
 /// A detection, before it has a price.
 pub struct RawFinding {
     pub category: &'static str,
@@ -27,6 +44,10 @@ pub struct FunctionContext<'tree> {
     pub is_constructor: bool,
 }
 
+// @aqs-file(disable:"Low Cohesion") the same call as `ScanReport`: these are bags of
+// per-file facts, computed once and shared, and their accessors group by which fact they
+// answer for — the profile's thresholds, or the file's own shape. LCOM4 reads that as
+// two responsibilities, which for a context struct is exactly what it should look like.
 pub struct FileContext<'tree, 'src> {
     /// A malformed directive in this file, if any. The file is still scored as though the
     /// directive were absent, so a broken suppression can never lower a score.
@@ -43,6 +64,8 @@ pub struct FileContext<'tree, 'src> {
     pub is_test: bool,
     pub loc: usize,
     pub functions: Vec<FunctionContext<'tree>>,
+    /// Byte ranges of the file's own inline test modules.
+    inline_tests: Vec<(usize, usize)>,
 }
 
 impl<'tree, 'src> FileContext<'tree, 'src> {
@@ -57,7 +80,7 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
         for node in metrics::iter_functions(&root, spec, source) {
             let name = metrics::function_name(&node, source)
                 .unwrap_or_else(|| "<anonymous>".to_string());
-            let is_constructor = spec.constructor_names.contains(name.as_str());
+            let is_constructor = metrics::is_constructor(&node, &name, spec);
             functions.push(FunctionContext {
                 node,
                 range: metrics::to_range(&node),
@@ -89,7 +112,20 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
             root,
             source,
             functions,
+            inline_tests: cfg_test_ranges(&root, source),
         }
+    }
+
+    /// Whether a node is inside one of this file's inline test modules.
+    ///
+    /// Rust keeps its unit tests in the file they test, so the path-based
+    /// `test_patterns` exemption never sees them. Every rule that counts *what a file
+    /// contains* has to ask this, or a file scores better for having no unit tests --
+    /// which is the one gradient this tool must never contain.
+    pub(crate) fn is_inline_test(&self, node: &Node) -> bool {
+        self.inline_tests
+            .iter()
+            .any(|(start, end)| node.start_byte() >= *start && node.end_byte() <= *end)
     }
 
     pub(crate) fn threshold(&self, key: &str) -> f64 {

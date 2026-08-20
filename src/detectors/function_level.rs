@@ -34,7 +34,11 @@ pub(crate) fn large_method(f: &FunctionContext, ctx: &FileContext, out: &mut Vec
     }
 }
 
-pub(crate) fn deep_nested_complexity(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
+pub(crate) fn deep_nested_complexity(
+    f: &FunctionContext,
+    ctx: &FileContext,
+    out: &mut Vec<RawFinding>,
+) {
     let threshold = ctx.threshold("function_nesting_depth_warning");
     if (f.nesting as f64) > threshold {
         out.push(RawFinding {
@@ -64,12 +68,22 @@ pub(crate) fn bumpy_road(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<R
     }
 }
 
-pub(crate) fn complex_conditional(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
+// @aqs(disable:"Duplicated Block") shares a read-two-thresholds-then-measure opening with
+// bumpy_road; the rules are unrelated and folding them together would obscure both
+pub(crate) fn complex_conditional(
+    f: &FunctionContext,
+    ctx: &FileContext,
+    out: &mut Vec<RawFinding>,
+) {
     let min_count = ctx.threshold("complex_conditional_min_count");
     let min_operators = ctx.threshold("complex_conditional_min_operators") as usize;
     let found = metrics::complex_conditionals(&f.node, ctx.spec, ctx.source, min_operators);
     if (found.len() as f64) >= min_count && !found.is_empty() {
-        let plural = if found.len() == 1 { "expression" } else { "expressions" };
+        let plural = if found.len() == 1 {
+            "expression"
+        } else {
+            "expressions"
+        };
         // Anchor on the first offending conditional, not the signature: this is an
         // expression-level smell and the exact spot is the actionable part.
         out.push(RawFinding {
@@ -90,7 +104,10 @@ pub(crate) fn complex_conditional(f: &FunctionContext, ctx: &FileContext, out: &
 /// double-count one signature.
 pub(crate) fn argument_count(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
     let (category, threshold_key) = if f.is_constructor {
-        (prof::CONSTRUCTOR_OVER_INJECTION, "constructor_max_arguments")
+        (
+            prof::CONSTRUCTOR_OVER_INJECTION,
+            "constructor_max_arguments",
+        )
     } else {
         (prof::EXCESS_ARGUMENTS, "function_max_arguments")
     };
@@ -136,7 +153,11 @@ pub(crate) fn brain_method(f: &FunctionContext, ctx: &FileContext, out: &mut Vec
     }
 }
 
-pub(crate) fn string_heavy_arguments(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
+pub(crate) fn string_heavy_arguments(
+    f: &FunctionContext,
+    ctx: &FileContext,
+    out: &mut Vec<RawFinding>,
+) {
     let threshold = ctx.threshold("function_string_arguments_warning");
     let strings = f
         .parameters
@@ -163,7 +184,11 @@ pub(crate) fn string_heavy_arguments(f: &FunctionContext, ctx: &FileContext, out
 /// Only annotated parameters are considered — an unannotated parameter carries no
 /// evidence either way, and guessing would make the score depend on how thoroughly
 /// the code is typed rather than on how well it is designed.
-pub(crate) fn primitive_obsession(f: &FunctionContext, ctx: &FileContext, out: &mut Vec<RawFinding>) {
+pub(crate) fn primitive_obsession(
+    f: &FunctionContext,
+    ctx: &FileContext,
+    out: &mut Vec<RawFinding>,
+) {
     let min_count = ctx.threshold("function_primitive_arguments_min_count");
     let ratio_threshold = ctx.threshold("function_primitive_arguments_ratio");
     let annotated: Vec<String> = f
@@ -200,4 +225,3 @@ pub(crate) fn primitive_obsession(f: &FunctionContext, ctx: &FileContext, out: &
 // --------------------------------------------------------------------------- //
 // File / module level
 // --------------------------------------------------------------------------- //
-

@@ -1,5 +1,6 @@
-//! Recognising assertions, in all three dialects: Python's `assert` statement,
-//! JS/TS `expect(..)` calls, and Rust's `assert!` macro family.
+//! Recognising assertions: Python's `assert` statement, JS/TS `expect(..)` calls,
+//! Rust's `assert!` macro family, and the `assert_*` / `expect(..).to` calls that Go
+//! and Ruby suites are written with.
 
 use crate::languages::LanguageSpec;
 use tree_sitter::Node;
@@ -9,18 +10,20 @@ use super::*;
 
 /// Whether a statement asserts something, in either assertion dialect.
 pub fn is_assertion(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    if spec.assertion_nodes.contains(node.kind()) {
+    if is_kind(node, &spec.assertion_nodes) {
         return true;
     }
-    if node.kind() != "expression_statement" || node.named_child_count() == 0 {
-        return false;
-    }
-    let expression = node.named_child(0).expect("named_child_count checked");
-    // `macro_invocation` covers Rust's assert!/assert_eq!/debug_assert! family.
-    if !matches!(
-        expression.kind(),
-        "call_expression" | "call" | "await_expression" | "macro_invocation"
-    ) {
+    // Most grammars wrap a statement-position call in an `expression_statement`; Ruby
+    // has no such node, so there the call *is* the statement.
+    let expression = if node.kind() == "expression_statement" {
+        match node.named_child(0) {
+            Some(child) => child,
+            None => return false,
+        }
+    } else {
+        *node
+    };
+    if !is_call(&expression) {
         return false;
     }
     let raw = text(&expression, source);

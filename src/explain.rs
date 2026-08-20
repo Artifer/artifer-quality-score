@@ -107,6 +107,13 @@ pub const RULE_DOCS: &[RuleDoc] = &[
         ],
     },
     RuleDoc {
+        category: prof::DUPLICATED_BLOCK,
+        summary: "The same run of statements, structurally identical, repeated elsewhere in the file.",
+        why: "This is the duplication that hides between the cracks: the whole-function rules need an entire function to match, so a three-line preamble pasted into forty different functions is invisible to them while being exactly the thing that goes stale. Every copy is a place a change has to be remembered, and the ones nobody remembers are where behaviour quietly diverges.",
+        fix: "Extract the block into a named function and call it from each site. If the copies differ slightly, the differences are usually the parameters the new function wants. If a block resists extraction because it touches too much local state, that is worth knowing too — it usually means the surrounding functions share a responsibility that has no name yet.",
+        thresholds: &["duplicated_block_min_statements", "duplicated_block_min_tokens"],
+    },
+    RuleDoc {
         category: prof::LARGE_ASSERTION_BLOCKS,
         summary: "A long run of consecutive assertions in a test.",
         why: "A wall of asserts means the test has no single subject, and when it fails you learn only the first thing that broke. It is a missing abstraction, not thoroughness.",
@@ -164,26 +171,44 @@ pub const RULE_DOCS: &[RuleDoc] = &[
     },
 ];
 
+/// Guidance for the unscored observations.
+///
+/// Kept separate from `RULE_DOCS` because these have no weight, cap or penalty to
+/// display, and `--list` is a table of what can cost points. An agent that meets an
+/// observation still needs to know what to do about it, so `aqs explain` resolves these
+/// by name exactly as it resolves a rule.
+pub const OBSERVATION_DOCS: &[RuleDoc] = &[
+    RuleDoc {
+        category: prof::CROSS_FILE_DUPLICATION,
+        summary: "The same function, structurally identical, living in more than one file.",
+        why: "Every copy is a place a future fix has to be remembered. The scored duplication rule only compares functions within a single file, so this is invisible to the score — and splitting a file that held two copies moves the duplication from scored to unscored, which makes the score go up for a change that made the code worse. That gradient is the reason this is reported at all.",
+        fix: "Move one copy to a shared module and import it from the others. If the copies have drifted apart on purpose, or they belong to modules that must not depend on each other, say so with `@aqs(disable:\"Cross-File Duplication\") <reason>` on one of them and it will stop being listed.",
+        thresholds: &["cross_file_duplication_min_lines_of_code"],
+    },
+];
+
 fn normalise(text: &str) -> String {
-    text.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase()
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>()
+        .to_lowercase()
 }
 
-/// Find a rule by name, case- and punctuation-insensitively.
+/// Find a rule or observation by name, case- and punctuation-insensitively.
 pub fn lookup(query: &str) -> Option<&'static RuleDoc> {
     let target = normalise(query);
-    if let Some(doc) = RULE_DOCS.iter().find(|doc| normalise(doc.category) == target) {
+    let catalogue = || RULE_DOCS.iter().chain(OBSERVATION_DOCS.iter());
+    if let Some(doc) = catalogue().find(|doc| normalise(doc.category) == target) {
         return Some(doc);
     }
     // Fall back to a prefix match so `aqs explain bumpy` works.
-    RULE_DOCS
-        .iter()
-        .find(|doc| normalise(doc.category).starts_with(&target))
+    catalogue().find(|doc| normalise(doc.category).starts_with(&target))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::profile::{Profile, RULE_DEFAULTS};
+    use crate::profile::{Profile, OBSERVATION_CATEGORIES, RULE_DEFAULTS};
 
     #[test]
     fn every_rule_is_documented_and_every_threshold_exists() {
@@ -198,9 +223,48 @@ mod tests {
     }
 
     #[test]
+    fn every_observation_is_documented_and_carries_no_weight() {
+        let profile = Profile::default();
+        assert_eq!(OBSERVATION_DOCS.len(), OBSERVATION_CATEGORIES.len());
+        for doc in OBSERVATION_DOCS {
+            assert!(
+                OBSERVATION_CATEGORIES.contains(&doc.category),
+                "{}",
+                doc.category
+            );
+            // An observation with a penalty config would be scored by `price_findings`
+            // the moment anything emitted it as a finding, which is exactly the coupling
+            // the channel exists to avoid.
+            assert!(
+                !profile.rules.contains_key(doc.category),
+                "{}",
+                doc.category
+            );
+            for key in doc.thresholds {
+                assert!(profile.thresholds.contains_key(*key), "{key}");
+            }
+        }
+    }
+
+    #[test]
+    fn observations_resolve_by_name_like_rules() {
+        assert_eq!(
+            lookup("cross-file duplication").unwrap().category,
+            prof::CROSS_FILE_DUPLICATION
+        );
+        assert_eq!(
+            lookup("crossfile").unwrap().category,
+            prof::CROSS_FILE_DUPLICATION
+        );
+    }
+
+    #[test]
     fn fuzzy_lookup_resolves() {
         assert_eq!(lookup("bumpy").unwrap().category, prof::BUMPY_ROAD);
-        assert_eq!(lookup("Bumpy Road Ahead").unwrap().category, prof::BUMPY_ROAD);
+        assert_eq!(
+            lookup("Bumpy Road Ahead").unwrap().category,
+            prof::BUMPY_ROAD
+        );
         assert!(lookup("not a rule").is_none());
     }
 }

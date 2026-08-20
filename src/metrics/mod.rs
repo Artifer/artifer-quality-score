@@ -33,26 +33,31 @@ pub use complexity::{
 };
 pub use naming::{class_name, function_name, is_scope_boundary, iter_functions};
 pub use signatures::{
-    has_receiver, is_primitive_type, is_string_type, parameter_type, parameters,
+    has_receiver, is_constructor, is_primitive_type, is_string_type, parameter_type, parameters,
 };
 pub use size::{is_docstring, logical_lines, normalised_tokens};
-pub use traversal::{all_nodes, named_children, own_nodes, text, to_range, COMMENT_NODES};
+pub use traversal::{
+    all_nodes, is_kind, named_children, own_nodes, text, to_range, CALL_NODES, COMMENT_NODES, FIELD_ACCESS_NODES,
+    MARKUP_NODES, SELF_RECEIVERS,
+};
 
 // Helpers the submodules share with each other but callers never need. Re-exported so
 // that each submodule's `use super::*` resolves them.
-pub(crate) use traversal::{children, is_comment};
+pub(crate) use traversal::{children, is_call, is_comment, is_markup};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::languages::LanguageSpec;
     use crate::languages::spec_for_name;
+    use crate::languages::LanguageSpec;
     use tree_sitter::Parser;
 
     fn parse(source: &str, language: &str) -> (tree_sitter::Tree, &'static LanguageSpec) {
         let spec = spec_for_name(language).expect("known language");
         let mut parser = Parser::new();
-        parser.set_language(&spec.language()).expect("grammar loads");
+        parser
+            .set_language(&spec.language())
+            .expect("grammar loads");
         (parser.parse(source, None).expect("parses"), spec)
     }
 
@@ -61,7 +66,10 @@ mod tests {
         let source = "def f(a, b):\n    if a and b:\n        return 1\n    return 0\n";
         let (tree, spec) = parse(source, "python");
         let functions = iter_functions(&tree.root_node(), spec, source.as_bytes());
-        assert_eq!(cyclomatic_complexity(&functions[0], spec, source.as_bytes()), 3);
+        assert_eq!(
+            cyclomatic_complexity(&functions[0], spec, source.as_bytes()),
+            3
+        );
     }
 
     #[test]
@@ -93,7 +101,10 @@ mod tests {
         let source = "class C:\n    def f(self, a, b):\n        return a\n";
         let (tree, spec) = parse(source, "python");
         let functions = iter_functions(&tree.root_node(), spec, source.as_bytes());
-        let method = functions.iter().find(|f| f.kind() == "function_definition").unwrap();
+        let method = functions
+            .iter()
+            .find(|f| f.kind() == "function_definition")
+            .unwrap();
         assert_eq!(parameters(method, spec, source.as_bytes()).len(), 2);
     }
 

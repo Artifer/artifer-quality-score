@@ -78,7 +78,7 @@ pub(crate) fn declaration_size(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     }
     let total: usize = metrics::all_nodes(&ctx.root)
         .iter()
-        .filter(|node| ctx.spec.declaration_nodes.contains(node.kind()))
+        .filter(|node| metrics::is_kind(node, &ctx.spec.declaration_nodes))
         .map(metrics::logical_lines)
         .sum();
     let threshold = ctx.size_threshold("file_declaration_lines_warning");
@@ -96,20 +96,25 @@ pub(crate) fn declaration_size(ctx: &FileContext, out: &mut Vec<RawFinding>) {
 
 /// How many functions a reader has to hold, and what to call them in the report.
 ///
-/// A Vue component is counted on what runs — its methods, watchers and lifecycle
-/// hooks — and not on what merely describes it. See `vue::DECLARATIVE_OPTIONS`
-/// for why, and note the wording changes with the count so the number stays one
-/// a reader can reproduce by counting the same things.
+/// Two exclusions, both about counting what the file *ships*. A Vue component is
+/// counted on what runs — its methods, watchers and lifecycle hooks — and not on what
+/// merely describes it; see `sfc::DECLARATIVE_OPTIONS` for why. And a Rust file's
+/// inline `#[cfg(test)]` module is not part of the module a reader has to hold: counting
+/// it would mean a file of nine functions and nineteen tests reads as a 28-function god
+/// module, and the cheapest way to fix that would be to delete the tests.
+///
+/// The wording changes with the count so the number stays one a reader can reproduce by
+/// counting the same things.
 fn counted_functions(ctx: &FileContext) -> (usize, &'static str) {
-    if !crate::vue::is_vue(&ctx.path) {
-        return (ctx.functions.len(), "functions");
+    let shipped = ctx.functions.iter().filter(|f| !ctx.is_inline_test(&f.node));
+
+    if !crate::sfc::is_vue(&ctx.path) {
+        return (shipped.count(), "functions");
     }
 
-    let declarative = crate::vue::declarative_ranges(&ctx.root, ctx.source);
-    let behaviour = ctx
-        .functions
-        .iter()
-        .filter(|f| !crate::vue::within(&declarative, f.node.start_byte()))
+    let declarative = crate::sfc::declarative_ranges(&ctx.root, ctx.source);
+    let behaviour = shipped
+        .filter(|f| !crate::sfc::within(&declarative, f.node.start_byte()))
         .count();
 
     (behaviour, "methods and handlers")

@@ -28,11 +28,28 @@ fn normalise_start(start: &Path) -> PathBuf {
 /// silently scored the other three, reporting their thin `forwardRef` wrappers as
 /// duplication — which is the library's intended shape, not a defect. `components.json`
 /// states where it lives, so read it rather than guess.
-pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
+/// Every directory at or above `start`, nearest first.
+///
+/// A file target searches from its containing directory. Both upward searches below need
+/// exactly this, and having written it twice, the second copy drifted: one of them
+/// handled a bare filename and the other did not.
+fn ancestors(start: &Path) -> Vec<PathBuf> {
     let start = normalise_start(start);
-    let start = start.as_path();
-    let mut directory: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
+    let mut directory: Option<&Path> = if start.is_dir() {
+        Some(start.as_path())
+    } else {
+        start.parent()
+    };
+    let mut found = Vec::new();
     while let Some(current) = directory {
+        found.push(current.to_path_buf());
+        directory = current.parent();
+    }
+    found
+}
+
+pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
+    for current in ancestors(start) {
         let candidate = current.join("components.json");
         if candidate.is_file() {
             let text = std::fs::read_to_string(&candidate).ok()?;
@@ -45,28 +62,24 @@ pub fn detect_shadcn_ui(start: &Path) -> Option<String> {
                 .trim_start_matches('~')
                 .trim_start_matches('/')
                 .trim_end_matches('/');
-            return if path.is_empty() { None } else { Some(path.to_string()) };
+            return if path.is_empty() {
+                None
+            } else {
+                Some(path.to_string())
+            };
         }
-        directory = current.parent();
     }
     None
 }
 
 /// Nearest config file at or above `start`.
 pub fn find_config(start: &Path) -> Option<PathBuf> {
-    let start = normalise_start(start);
-    let start = start.as_path();
-    let mut directory: Option<&Path> = if start.is_dir() { Some(start) } else { start.parent() };
-    while let Some(current) = directory {
-        for filename in CONFIG_FILENAMES {
-            let candidate = current.join(filename);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        directory = current.parent();
-    }
-    None
+    ancestors(start).into_iter().find_map(|current| {
+        CONFIG_FILENAMES
+            .iter()
+            .map(|filename| current.join(filename))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 /// Fold in the shadcn directory a repository declares.
@@ -74,7 +87,9 @@ pub fn find_config(start: &Path) -> Option<PathBuf> {
 /// A declared component directory is a fact about the repository, not a preference, so
 /// it applies whether or not there is an `.aqs.json`.
 fn apply_shadcn(profile: &mut Profile, root: &Path) {
-    let Some(ui) = detect_shadcn_ui(root) else { return };
+    let Some(ui) = detect_shadcn_ui(root) else {
+        return;
+    };
     for pattern in [format!("{ui}/*"), format!("*/{ui}/*")] {
         profile.exclude_patterns.push_if_absent(pattern);
     }
@@ -135,19 +150,30 @@ fn apply_rules(profile: &mut Profile, rules: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn string_list(object: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<Vec<String>> {
+fn string_list(
+    object: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Option<Vec<String>> {
     let array = object.get(key)?.as_array()?;
-    Some(array.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+    Some(
+        array
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+    )
 }
 
 fn read_config(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("{}: cannot read config", path.display()))?;
-    let data: serde_json::Value = serde_json::from_str(&text)
-        .with_context(|| format!("{}: invalid JSON", path.display()))?;
+    let data: serde_json::Value =
+        serde_json::from_str(&text).with_context(|| format!("{}: invalid JSON", path.display()))?;
     match data {
         serde_json::Value::Object(object) => Ok(object),
-        _ => bail!("{}: expected a JSON object at the top level", path.display()),
+        _ => bail!(
+            "{}: expected a JSON object at the top level",
+            path.display()
+        ),
     }
 }
 
@@ -159,6 +185,7 @@ const CONFIG_SECTIONS: &[&str] = &[
     "test_patterns",
     "exclude_patterns",
     "test_exempt_rules",
+    "scan_worktrees",
 ];
 
 /// Reject unrecognised top-level keys.
@@ -196,26 +223,49 @@ pub fn load_profile(root: &Path, explicit: Option<&Path>) -> Result<Profile> {
     if let Some(config) = config {
         let object = read_config(&config)?;
         reject_unknown_sections(&object)?;
-        if let Some(name) = object.get("name").and_then(|v| v.as_str()) {
-            profile.name = name.to_string();
-        }
+        apply_settings(&mut profile, &object)?;
         if let Some(thresholds) = object.get("thresholds") {
             apply_thresholds(&mut profile, thresholds)?;
         }
         if let Some(rules) = object.get("rules") {
             apply_rules(&mut profile, rules)?;
         }
-        if let Some(patterns) = string_list(&object, "test_patterns") {
-            profile.test_patterns = PatternSet::new(patterns);
-        }
-        if let Some(patterns) = string_list(&object, "exclude_patterns") {
-            profile.exclude_patterns = PatternSet::new(patterns);
-        }
-        if let Some(rules) = string_list(&object, "test_exempt_rules") {
-            profile.test_exempt_rules = PatternSet::new(rules);
-        }
+        apply_pattern_lists(&mut profile, &object);
     }
 
     apply_shadcn(&mut profile, root);
     Ok(profile)
+}
+
+/// The scalar settings: what the profile is called, and what gets walked.
+fn apply_settings(
+    profile: &mut Profile,
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<()> {
+    if let Some(name) = object.get("name").and_then(|v| v.as_str()) {
+        profile.name = name.to_string();
+    }
+    if let Some(value) = object.get("scan_worktrees") {
+        let Some(flag) = value.as_bool() else {
+            bail!("scan_worktrees must be true or false, got {value}");
+        };
+        profile.scan_worktrees = flag;
+    }
+    Ok(())
+}
+
+/// The three pattern lists.
+///
+/// Each *replaces* its defaults rather than extending them: a config that says
+/// `exclude_patterns` means those patterns, not those plus fifteen it never mentioned.
+fn apply_pattern_lists(profile: &mut Profile, object: &serde_json::Map<String, serde_json::Value>) {
+    if let Some(patterns) = string_list(object, "test_patterns") {
+        profile.test_patterns = PatternSet::new(patterns);
+    }
+    if let Some(patterns) = string_list(object, "exclude_patterns") {
+        profile.exclude_patterns = PatternSet::new(patterns);
+    }
+    if let Some(rules) = string_list(object, "test_exempt_rules") {
+        profile.test_exempt_rules = PatternSet::new(rules);
+    }
 }

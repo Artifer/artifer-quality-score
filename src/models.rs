@@ -29,7 +29,12 @@ pub struct Range {
 
 impl Range {
     pub fn line(line: usize) -> Self {
-        Self { start_line: line, start_column: 1, end_line: line, end_column: 1 }
+        Self {
+            start_line: line,
+            start_column: 1,
+            end_line: line,
+            end_column: 1,
+        }
     }
 }
 
@@ -73,6 +78,65 @@ pub struct FunctionReport {
     pub code_smells: Vec<Finding>,
 }
 
+/// The structural signature of one function, for cross-file matching.
+///
+/// Computed from the file's own bytes and nothing else, which is what lets it ride along
+/// in the content-keyed cache: a cache hit contributes its fingerprints to the cross-file
+/// join without the file being re-parsed.
+///
+/// `hash` covers the normalised token sequence, so two functions that differ only in
+/// identifiers and literals share a fingerprint. Matching is exact rather than fuzzy —
+/// a hash join has no notion of "87% similar" — which trades recall for a join that costs
+/// nothing and never guesses. The intra-file [`Finding`] rule stays fuzzy.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloneFingerprint {
+    pub hash: String,
+    pub function: String,
+    pub line: usize,
+    pub loc: usize,
+    /// The reason from an `@aqs` directive on this function, when one dismisses
+    /// cross-file duplication here. Resolved during per-file analysis, because that is
+    /// the only place the directives are in scope.
+    pub dismissed: Option<String>,
+}
+
+/// One site participating in an observation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ObservationSite {
+    pub path: String,
+    pub line: usize,
+    pub function: Option<String>,
+}
+
+/// Something true about the code that deliberately carries no penalty.
+///
+/// The score answers "how hard is this file to read", and every point it deducts traces
+/// to one measurement inside one file. Some real problems do not fit that shape: they
+/// span files, or they depend on intent the tool cannot read. Pricing them would either
+/// make a file's score depend on other files — breaking the invariant `gate`, `delta` and
+/// the cache all rest on — or charge for a judgement the tool is not entitled to make.
+///
+/// So they are reported instead, and resolved the same way a finding is: fix it, or
+/// dismiss it with an `@aqs` directive whose reason stays visible in the report. An
+/// observation list that reaches empty is the stopping condition, in place of a number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Observation {
+    pub category: String,
+    pub details: String,
+    /// Every place the observation is about, in path order. Always at least two — a
+    /// one-site observation is a finding, and belongs in the score.
+    pub sites: Vec<ObservationSite>,
+    /// The author's justification, when an `@aqs` directive at one of the sites
+    /// dismissed it. Recorded rather than dropped, exactly as suppressions are.
+    pub dismissed: Option<String>,
+}
+
+impl Observation {
+    pub fn is_open(&self) -> bool {
+        self.dismissed.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileReport {
     pub path: String,
@@ -99,6 +163,14 @@ pub struct FileReport {
     /// this, because a directive that does not work is worse than no directive.
     #[serde(default)]
     pub directive_error: Option<String>,
+    /// Structural signatures of this file's functions, for the cross-file join.
+    ///
+    /// Deliberately **not** `#[serde(default)]`. A cache entry written before this field
+    /// existed must fail to deserialise, which `sqlite::get` already treats as a miss and
+    /// recomputes. Defaulting it would instead resurrect the entry with no fingerprints,
+    /// and the file would drop silently out of every cross-file observation — a wrong
+    /// answer that looks exactly like a clean one.
+    pub fingerprints: Vec<CloneFingerprint>,
 }
 
 impl FileReport {
@@ -114,6 +186,7 @@ impl FileReport {
             syntax_errors: 0,
             suppressed: Vec::new(),
             directive_error: None,
+            fingerprints: Vec::new(),
         }
     }
 
@@ -135,6 +208,9 @@ impl FileReport {
     }
 }
 
+// @aqs-file(disable:"Low Cohesion") report structs are data, and LCOM is a class-design
+// signal — ScanReport carries per-file results and cross-file results, and its accessors
+// group by that on purpose. Merging them to connect the groups would be metric-gaming.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
     /// Tool version, so a score can always be traced to the code that produced it.
@@ -145,6 +221,9 @@ pub struct ScanReport {
     pub score: f64,
     pub loc: usize,
     pub files: Vec<FileReport>,
+    /// Cross-file facts that carry no penalty. See [`Observation`].
+    #[serde(default)]
+    pub observations: Vec<Observation>,
 }
 
 impl ScanReport {
@@ -154,6 +233,12 @@ impl ScanReport {
 
     pub fn findings_count(&self) -> usize {
         self.files.iter().map(|f| f.finding_count()).sum()
+    }
+
+    /// Observations nobody has fixed or dismissed yet — the checklist that has to
+    /// reach zero, alongside the score that has to reach its target.
+    pub fn open_observations(&self) -> usize {
+        self.observations.iter().filter(|o| o.is_open()).count()
     }
 }
 
@@ -216,19 +301,29 @@ pub struct GateReport {
     pub tolerance: f64,
     /// Per-file detail for the changed files, so a failure is actionable.
     pub files: Vec<FileDelta>,
+    /// Observations present now that the baseline did not have.
+    ///
+    /// Reported, never gated on: [`Observation`] is unscored by construction, and a gate
+    /// that failed on one would be pricing it through the back door. It is here because
+    /// a channel nobody sees in CI is a channel that does not exist — a branch that
+    /// copies a function into a second file passes cleanly on score alone, and this is
+    /// the line that says so.
+    #[serde(default)]
+    pub observations_introduced: Vec<Observation>,
 }
 
 impl GateReport {
     pub fn passed(&self) -> bool {
         self.score_change >= -self.tolerance.abs()
     }
-
 }
 
 /// LoC-weighted mean, so a 3000-line mess is not offset by ten clean stubs.
 pub fn aggregate_score(files: &[FileReport]) -> f64 {
-    let scored: Vec<&FileReport> =
-        files.iter().filter(|f| f.error.is_none() && f.loc > 0).collect();
+    let scored: Vec<&FileReport> = files
+        .iter()
+        .filter(|f| f.error.is_none() && f.loc > 0)
+        .collect();
     if scored.is_empty() {
         return SCORE_MAX;
     }
@@ -260,6 +355,7 @@ mod tests {
             syntax_errors: 0,
             suppressed: vec![],
             directive_error: None,
+            fingerprints: vec![],
         }
     }
 

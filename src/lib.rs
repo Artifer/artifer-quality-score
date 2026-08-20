@@ -14,10 +14,12 @@
 pub mod analyze;
 pub mod cache;
 pub mod cli;
-pub mod detectors;
-pub mod directives;
-pub mod difflib;
+pub mod clones;
 pub mod delta;
+pub mod detectors;
+pub mod difflib;
+pub mod directives;
+pub mod explain;
 pub mod gate;
 pub mod gitio;
 pub mod glob;
@@ -27,7 +29,6 @@ pub mod models;
 pub mod profile;
 pub mod render;
 pub mod scoring;
-pub mod explain;
-pub mod vue;
+pub mod sfc;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

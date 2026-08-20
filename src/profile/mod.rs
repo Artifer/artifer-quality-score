@@ -31,6 +31,13 @@ pub struct Profile {
     /// independent methods that share no state, so design rules about cohesion fire
     /// constantly on a perfectly good test suite.
     pub test_exempt_rules: PatternSet,
+    /// Whether to descend into linked git worktrees found inside the scan root.
+    ///
+    /// Off by default. A worktree is a second checkout of the same repository, so
+    /// scanning one means scoring the same file twice: it skews the LoC-weighted
+    /// aggregate toward whichever branch happens to be checked out, and it turns every
+    /// function in the tree into cross-file duplication against its own original.
+    pub scan_worktrees: bool,
 }
 
 impl Default for Profile {
@@ -48,6 +55,7 @@ impl Default for Profile {
             test_patterns: TEST_PATTERNS.iter().map(|s| s.to_string()).collect(),
             exclude_patterns: EXCLUDE_PATTERNS.iter().map(|s| s.to_string()).collect(),
             test_exempt_rules: TEST_EXEMPT_RULES.iter().map(|s| s.to_string()).collect(),
+            scan_worktrees: false,
         }
     }
 }
@@ -74,7 +82,13 @@ mod tests {
 
     #[test]
     fn penalty_grows_past_the_threshold_then_caps() {
-        let config = RuleConfig { base: 1.0, scale: 10.0, cap: 2.5, file_cap: 9.0, weight: 1.0 };
+        let config = RuleConfig {
+            base: 1.0,
+            scale: 10.0,
+            cap: 2.5,
+            file_cap: 9.0,
+            weight: 1.0,
+        };
         assert_eq!(config.penalty(10.0, 10.0), 1.0);
         assert_eq!(config.penalty(20.0, 10.0), 2.0);
         assert_eq!(config.penalty(1000.0, 10.0), 2.5);
@@ -82,26 +96,46 @@ mod tests {
 
     #[test]
     fn zero_weight_is_free() {
-        let config = RuleConfig { base: 1.0, scale: 10.0, cap: 5.0, file_cap: 9.0, weight: 0.0 };
+        let config = RuleConfig {
+            base: 1.0,
+            scale: 10.0,
+            cap: 5.0,
+            file_cap: 9.0,
+            weight: 0.0,
+        };
         assert_eq!(config.penalty(100.0, 10.0), 0.0);
     }
 
     #[test]
     fn recognises_test_and_excluded_paths() {
         let profile = Profile::default();
-        assert!(profile.test_patterns.matches("apps/core/tests/test_models.py"));
+        assert!(profile
+            .test_patterns
+            .matches("apps/core/tests/test_models.py"));
         assert!(profile.test_patterns.matches("src/thing.spec.ts"));
         assert!(!profile.test_patterns.matches("apps/core/models.py"));
 
-        assert!(profile.exclude_patterns.matches("node_modules/react/index.js"));
-        assert!(profile.exclude_patterns.matches("src/components/ui/button.tsx"));
+        assert!(profile
+            .exclude_patterns
+            .matches("node_modules/react/index.js"));
+        assert!(profile
+            .exclude_patterns
+            .matches("src/components/ui/button.tsx"));
         assert!(profile.exclude_patterns.matches("src/types/api.d.ts"));
-        assert!(profile.exclude_patterns.matches("reference/generate_deck.py"));
-        assert!(profile.exclude_patterns.matches("tools/lib/reference/analysis_catalogue.py"));
-        assert!(!profile.exclude_patterns.matches("src/components/TenderTable.tsx"));
+        assert!(profile
+            .exclude_patterns
+            .matches("reference/generate_deck.py"));
+        assert!(profile
+            .exclude_patterns
+            .matches("tools/lib/reference/analysis_catalogue.py"));
+        assert!(!profile
+            .exclude_patterns
+            .matches("src/components/TenderTable.tsx"));
         // Only the directory is excluded — a file merely named for it is still scored.
         assert!(!profile.exclude_patterns.matches("src/reference_data.py"));
-        assert!(!profile.exclude_patterns.matches("src/lib/references/model.py"));
+        assert!(!profile
+            .exclude_patterns
+            .matches("src/lib/references/model.py"));
     }
 
     #[test]
@@ -137,8 +171,15 @@ mod shadcn_tests {
             ("~/app/primitives", "app/primitives"),
             ("shared/ui", "shared/ui"),
         ] {
-            let root = scratch("alias", Some(&format!(r#"{{"aliases":{{"ui":"{alias}"}}}}"#)));
-            assert_eq!(detect_shadcn_ui(&root).as_deref(), Some(expected), "{alias}");
+            let root = scratch(
+                "alias",
+                Some(&format!(r#"{{"aliases":{{"ui":"{alias}"}}}}"#)),
+            );
+            assert_eq!(
+                detect_shadcn_ui(&root).as_deref(),
+                Some(expected),
+                "{alias}"
+            );
             let _ = std::fs::remove_dir_all(&root);
         }
     }
@@ -147,8 +188,12 @@ mod shadcn_tests {
     fn a_declared_ui_directory_is_excluded() {
         let root = scratch("exclude", Some(r#"{"aliases":{"ui":"@/app/primitives"}}"#));
         let profile = load_profile(&root, None).expect("loads");
-        assert!(profile.exclude_patterns.matches("app/primitives/button.tsx"));
-        assert!(profile.exclude_patterns.matches("src/app/primitives/button.tsx"));
+        assert!(profile
+            .exclude_patterns
+            .matches("app/primitives/button.tsx"));
+        assert!(profile
+            .exclude_patterns
+            .matches("src/app/primitives/button.tsx"));
         // Unrelated code is untouched.
         assert!(!profile.exclude_patterns.matches("src/app/page.tsx"));
         let _ = std::fs::remove_dir_all(&root);
@@ -160,11 +205,15 @@ mod shadcn_tests {
         // observed layouts are also static defaults.
         let profile = Profile::default();
         assert!(profile.exclude_patterns.matches("src/shared/ui/avatar.tsx"));
-        assert!(profile.exclude_patterns.matches("src/components/ui/button.tsx"));
+        assert!(profile
+            .exclude_patterns
+            .matches("src/components/ui/button.tsx"));
         assert!(profile.exclude_patterns.matches("shared/ui/tabs.tsx"));
         // A `shared/` directory that is not the ui folder stays in scope.
         assert!(!profile.exclude_patterns.matches("src/shared/api/client.ts"));
-        assert!(!profile.exclude_patterns.matches("src/shared/i18n/messages/en.ts"));
+        assert!(!profile
+            .exclude_patterns
+            .matches("src/shared/i18n/messages/en.ts"));
     }
 
     #[test]

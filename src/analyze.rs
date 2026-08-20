@@ -9,9 +9,10 @@
 //! this be used as a regression gate at all, and what makes the report cache sound.
 
 use crate::cache::{content_key, Cache};
+use crate::clones;
 use crate::detectors::{self, FileContext};
-use crate::metrics;
 use crate::languages::{spec_for_path, LanguageSpec};
+use crate::metrics;
 use crate::models::{aggregate_score, FileReport, ScanReport};
 use crate::profile::Profile;
 use crate::scoring;
@@ -33,16 +34,24 @@ impl AnalysisJob {
     ///
     /// Every reader of source — the filesystem walk and the git tree alike — builds
     /// its jobs here, so a file is prepared the same way whichever it came from. A
-    /// Vue SFC is reduced to its script block, in place, and may resolve to a
-    /// different language than its extension suggested; everything else is taken
+    /// single-file component is reduced to its script block, in place, and may resolve
+    /// to a different language than its extension suggested; everything else is taken
     /// as it is.
     pub fn new(path: String, spec: &LanguageSpec, source: Vec<u8>) -> Self {
-        if !crate::vue::is_vue(&path) {
-            return Self { path, language: spec.name, source };
+        if !crate::sfc::is_component(&path) {
+            return Self {
+                path,
+                language: spec.name,
+                source,
+            };
         }
 
-        let script = crate::vue::extract(&source);
-        Self { path, language: script.language, source: script.source }
+        let script = crate::sfc::extract(&source);
+        Self {
+            path,
+            language: script.language,
+            source: script.source,
+        }
     }
 }
 
@@ -85,7 +94,11 @@ fn count_syntax_errors(root: &Node) -> usize {
 /// `&amp;&amp;` would destroy real logical operators — silently lowering complexity and
 /// inflating the score.
 fn is_operator_ampersand(source: &[u8], index: usize) -> bool {
-    let previous = if index > 0 { source.get(index - 1) } else { None };
+    let previous = if index > 0 {
+        source.get(index - 1)
+    } else {
+        None
+    };
     let next = source.get(index + 1);
     next == Some(&b'&') || previous == Some(&b'&') || next == Some(&b'=')
 }
@@ -198,9 +211,11 @@ pub fn analyze_source(
     report.syntax_errors = errors;
     report.suppressed = suppressed;
     report.directive_error = ctx.directive_error.clone();
+    // Derived from this file alone, and never from its score: the cross-file comparison
+    // happens later, in `scan`, so this stays the pure per-file function the cache needs.
+    report.fingerprints = clones::fingerprints(&ctx);
     report
 }
-
 
 fn analyze_job(job: &AnalysisJob, profile: &Profile) -> FileReport {
     let spec = crate::languages::spec_for_name(job.language).expect("language was resolved");
@@ -292,16 +307,53 @@ fn is_scannable(path: &Path, profile: &Profile) -> bool {
     spec_for_path(&shown).is_some() && !profile.exclude_patterns.matches(&shown)
 }
 
+/// Whether `directory` is the root of a linked git worktree.
+///
+/// A worktree root holds a `.git` *file* rather than a directory, pointing at the real
+/// repository: `gitdir: /path/to/repo/.git/worktrees/<name>`. Submodules use the same
+/// file form but point into `.git/modules/`, and a submodule is part of the project, so
+/// the `worktrees` segment is what distinguishes them.
+///
+/// Detected rather than matched on a directory name. A project may legitimately have a
+/// directory called `trees/` or `worktrees/` full of real source, and being a second
+/// checkout of the same repository is a fact that can be read instead of guessed — the
+/// same reasoning as `detect_shadcn_ui` reading `components.json`.
+fn is_linked_worktree(directory: &Path) -> bool {
+    let marker = directory.join(".git");
+    if !marker.is_file() {
+        return false;
+    }
+    let Ok(contents) = std::fs::read_to_string(&marker) else {
+        return false;
+    };
+    let Some(gitdir) = contents
+        .lines()
+        .next()
+        .and_then(|l| l.strip_prefix("gitdir:"))
+    else {
+        return false;
+    };
+    gitdir.replace('\\', "/").contains("/worktrees/")
+}
+
 /// Whether to descend into a directory.
 ///
-/// The root is never pruned, so an explicit scan of an excluded directory still
-/// descends. Its files remain subject to `is_scannable`, so pruning is purely a
-/// traversal optimisation and cannot change the result.
+/// The root is never pruned, so an explicit scan of an excluded directory — or of a
+/// worktree — still descends. That is the escape hatch: point `aqs` at a worktree
+/// directly and it scores it.
+///
+/// Excluded directories are pruned purely as a traversal optimisation, since
+/// `is_scannable` re-checks every file. Worktree pruning is different: it is the *only*
+/// place worktrees are skipped, because nothing in a worktree's path distinguishes it
+/// from the original.
 fn keep_directory(entry: &walkdir::DirEntry, profile: &Profile) -> bool {
     if entry.depth() == 0 || !entry.file_type().is_dir() {
         return true;
     }
-    !profile.exclude_patterns.matches(&as_posix(entry.path()))
+    if profile.exclude_patterns.matches(&as_posix(entry.path())) {
+        return false;
+    }
+    profile.scan_worktrees || !is_linked_worktree(entry.path())
 }
 
 /// Every supported, non-excluded file under `roots`, in sorted order.
@@ -361,13 +413,19 @@ pub fn scan(
     let mut reports = analyze_jobs(&jobs, profile, cache);
     reports.extend(unreadable);
 
-    let scored: Vec<FileReport> =
-        reports.iter().filter(|r| r.error.is_none()).cloned().collect();
+    let scored: Vec<FileReport> = reports
+        .iter()
+        .filter(|r| r.error.is_none())
+        .cloned()
+        .collect();
     ScanReport {
         version: VERSION.to_string(),
         profile: profile.name.clone(),
         score: aggregate_score(&scored),
         loc: scored.iter().map(|r| r.loc).sum(),
+        // Runs over the finished reports, so cache hits take part without being
+        // re-analysed and nothing here can feed back into a file's score.
+        observations: clones::cross_file_duplication(&reports),
         files: reports,
     }
 }

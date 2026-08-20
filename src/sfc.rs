@@ -1,9 +1,10 @@
-//! Vue single-file components.
+//! Single-file components: Vue and Svelte.
 //!
 //! An SFC is not a language of its own: it is an HTML wrapper holding a `<script>`
-//! block written in JavaScript or TypeScript, a `<template>`, and a `<style>`. aqs
-//! scores the script — the part written in a language it parses — and leaves the
-//! other two to the tools that own them (eslint-plugin-vue, stylelint).
+//! block written in JavaScript or TypeScript, markup, and a `<style>`. aqs scores the
+//! script — the part written in a language it parses — and leaves the other two to the
+//! tools that own them (eslint-plugin-vue, svelte-check, stylelint). Neither framework
+//! needs a grammar of its own for this: the script inside is ordinary JS or TS.
 //!
 //! The script is extracted **in place**: every line outside it is blanked, keeping
 //! its newline, so tree-sitter's rows still line up with the `.vue` file and a
@@ -36,7 +37,17 @@ pub struct Script {
     pub language: &'static str,
 }
 
-/// Whether this path is a Vue SFC.
+/// Whether this path is a single-file component whose script must be extracted.
+pub fn is_component(path: &str) -> bool {
+    let lowered = path.to_ascii_lowercase();
+    lowered.ends_with(".vue") || lowered.ends_with(".svelte")
+}
+
+/// Whether this path is specifically a Vue SFC.
+///
+/// Narrower than `is_component` on purpose: only Vue has the options object that
+/// `declarative_ranges` reads, and asking a Svelte component for one would be asking a
+/// question its syntax does not answer.
 pub fn is_vue(path: &str) -> bool {
     path.to_ascii_lowercase().ends_with(".vue")
 }
@@ -61,8 +72,9 @@ fn blanked(line: &str) -> &str {
 
 /// The script blocks of an SFC, blanked in place.
 ///
-/// Both blocks of a `<script>` + `<script setup>` pair are kept: they are two halves
-/// of one component, and either can hold the code worth scoring. A component with no
+/// Every block is kept: Vue's `<script>` + `<script setup>` pair and Svelte's
+/// `<script>` + `<script module>` pair are each two halves of one component, and
+/// either half can hold the code worth scoring. A component with no
 /// script at all yields an empty file, which scores nothing and weighs nothing.
 ///
 /// The tag lines themselves are blanked — they are HTML, not JavaScript — so a block
@@ -311,5 +323,35 @@ mod tests {
 
         assert_eq!(script.lines().count(), 6);
         assert_eq!(script.lines().nth(4), Some("const a = 1"));
+    }
+
+    #[test]
+    fn a_svelte_component_keeps_both_of_its_script_blocks() {
+        let source = "<script context=\"module\" lang=\"ts\">\nexport const ssr = true\n</script>\n\n<script lang=\"ts\">\nlet count = 0\n</script>\n\n<button on:click={() => count++}>{count}</button>\n\n<style>\n  button { color: red; }\n</style>\n";
+        let script = extract(source.as_bytes());
+        let out = String::from_utf8(script.source).expect("utf-8");
+
+        assert_eq!(script.language, "typescript");
+        assert!(out.contains("export const ssr = true"), "{out}");
+        assert!(out.contains("let count = 0"), "{out}");
+        // Markup and style are blanked, and the line count is preserved so a finding
+        // still points at the line a reader will open.
+        assert!(!out.contains("button {"), "{out}");
+        assert!(!out.contains("on:click"), "{out}");
+        assert_eq!(out.lines().count(), source.lines().count());
+    }
+
+    #[test]
+    fn a_svelte_component_without_lang_is_javascript() {
+        assert_eq!(language("<script>\nlet a = 1\n</script>\n"), "javascript");
+    }
+
+    #[test]
+    fn only_vue_is_asked_for_an_options_object() {
+        assert!(is_component("src/Counter.svelte"));
+        assert!(is_component("src/Player.vue"));
+        assert!(!is_component("src/main.ts"));
+        assert!(is_vue("src/Player.vue"));
+        assert!(!is_vue("src/Counter.svelte"));
     }
 }

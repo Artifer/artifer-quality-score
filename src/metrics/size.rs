@@ -21,11 +21,18 @@ pub fn is_docstring(node: &Node) -> bool {
 }
 
 /// Non-blank, non-comment, non-docstring lines spanned by `node`.
+/// Whether a node is something other than code: a comment, a docstring, or the markup
+/// a `.php` file wraps its code islands in. None of it is a line this tool could explain
+/// a finding about, so none of it is counted as one.
+fn is_prose(node: &Node) -> bool {
+    is_comment(node) || is_docstring(node) || is_markup(node)
+}
+
 pub fn logical_lines(node: &Node) -> usize {
     let mut lines: HashSet<usize> = HashSet::new();
     let mut stack = vec![*node];
     while let Some(current) = stack.pop() {
-        if is_comment(&current) || is_docstring(&current) {
+        if is_prose(&current) {
             continue;
         }
         if current.child_count() == 0 {

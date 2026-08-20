@@ -22,6 +22,7 @@ pub const CONSTRUCTOR_OVER_INJECTION: &str = "Constructor Over-Injection";
 pub const STRING_HEAVY_ARGUMENTS: &str = "String Heavy Function Arguments";
 pub const PRIMITIVE_OBSESSION: &str = "Primitive Obsession";
 pub const CODE_DUPLICATION: &str = "Code Duplication";
+pub const DUPLICATED_BLOCK: &str = "Duplicated Block";
 pub const LARGE_ASSERTION_BLOCKS: &str = "Large Assertion Blocks";
 pub const DUPLICATED_ASSERTION_BLOCKS: &str = "Duplicated Assertion Blocks";
 pub const FILE_SIZE: &str = "Lines of Code in a Single File";
@@ -30,6 +31,16 @@ pub const FUNCTION_COUNT: &str = "Number of Functions in a Single Module";
 pub const OVERALL_COMPLEXITY: &str = "Overall Code Complexity";
 pub const BRAIN_CLASS: &str = "Brain Class";
 pub const LOW_COHESION: &str = "Low Cohesion";
+
+// Observation identifiers. Same contract as the rule names above — they appear in JSON,
+// in `aqs explain`, and in `@aqs` directives — but they are deliberately absent from
+// `RULE_DEFAULTS`, because an observation has no penalty to configure. See
+// `models::Observation` for why some things are reported rather than priced.
+pub const CROSS_FILE_DUPLICATION: &str = "Cross-File Duplication";
+
+/// Every observation category. Directives validate names against this as well as against
+/// the rules, so `@aqs(disable:"Cross-File Duplication")` is accepted and a typo is not.
+pub const OBSERVATION_CATEGORIES: &[&str] = &[CROSS_FILE_DUPLICATION];
 
 /// How much one rule can cost a file.
 ///
@@ -59,7 +70,11 @@ impl RuleConfig {
             return 0.0;
         }
         let excess = (value - threshold).max(0.0);
-        let growth = if self.scale > 0.0 { excess / self.scale } else { 0.0 };
+        let growth = if self.scale > 0.0 {
+            excess / self.scale
+        } else {
+            0.0
+        };
         (self.base * (1.0 + growth)).min(self.cap) * self.weight
     }
 }
@@ -89,6 +104,19 @@ pub const THRESHOLD_KEYS: &[(&str, f64)] = &[
     // Duplication
     ("function_duplication_min_lines_of_code_for_check", 15.0),
     ("function_duplication_min_similarity_percentage", 85.0),
+    // Cross-file matching is exact rather than fuzzy, so it can afford a much lower floor
+    // than the intra-file rule: the same function in six files is worth knowing about at
+    // 5 lines, where a 5-line near-match within one file would mostly be noise.
+    ("cross_file_duplication_min_lines_of_code", 5.0),
+    // Repeated blocks *within* a function-sized unit. The token floor is the real
+    // control: three consecutive statements is a common enough shape that matching on
+    // count alone reports coincidences, so a window must also be substantial.
+    ("duplicated_block_min_statements", 3.0),
+    // 30 is set from the canonical case rather than picked round: a log-plus-metric-plus-
+    // return failure block — the shape this rule exists to catch — normalises to about 35
+    // tokens, and a floor of 40 silently missed it. Three bare assignments come to ~12 and
+    // stay below.
+    ("duplicated_block_min_tokens", 30.0),
     // Test code
     ("assertion_block_max_statements", 8.0),
     ("duplicated_assertion_block_min_statements", 3.0),
@@ -108,25 +136,208 @@ pub const THRESHOLD_KEYS: &[(&str, f64)] = &[
 pub const RULE_DEFAULTS: &[(&str, RuleConfig)] = &[
     // Complex Method and Deep Nesting carry the most weight: they are the two
     // factors with the strongest published link to defect risk.
-    (COMPLEX_METHOD, RuleConfig { base: 0.6, scale: 10.0, cap: 2.5, file_cap: 5.0, weight: 1.0 }),
-    (DEEP_NESTED_COMPLEXITY, RuleConfig { base: 0.8, scale: 2.0, cap: 2.5, file_cap: 5.0, weight: 1.0 }),
-    (LARGE_METHOD, RuleConfig { base: 0.5, scale: 60.0, cap: 2.0, file_cap: 4.0, weight: 1.0 }),
-    (BUMPY_ROAD, RuleConfig { base: 0.5, scale: 2.0, cap: 2.0, file_cap: 4.0, weight: 1.0 }),
-    (COMPLEX_CONDITIONAL, RuleConfig { base: 0.4, scale: 2.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
-    (EXCESS_ARGUMENTS, RuleConfig { base: 0.4, scale: 3.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
-    (BRAIN_METHOD, RuleConfig { base: 1.5, scale: 15.0, cap: 3.0, file_cap: 4.5, weight: 1.0 }),
-    (CONSTRUCTOR_OVER_INJECTION, RuleConfig { base: 0.5, scale: 3.0, cap: 1.5, file_cap: 2.0, weight: 1.0 }),
-    (STRING_HEAVY_ARGUMENTS, RuleConfig { base: 0.3, scale: 2.0, cap: 1.0, file_cap: 2.0, weight: 1.0 }),
-    (PRIMITIVE_OBSESSION, RuleConfig { base: 0.4, scale: 0.0, cap: 0.4, file_cap: 1.6, weight: 1.0 }),
-    (CODE_DUPLICATION, RuleConfig { base: 0.8, scale: 0.0, cap: 0.8, file_cap: 3.0, weight: 1.0 }),
+    (
+        COMPLEX_METHOD,
+        RuleConfig {
+            base: 0.6,
+            scale: 10.0,
+            cap: 2.5,
+            file_cap: 5.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        DEEP_NESTED_COMPLEXITY,
+        RuleConfig {
+            base: 0.8,
+            scale: 2.0,
+            cap: 2.5,
+            file_cap: 5.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        LARGE_METHOD,
+        RuleConfig {
+            base: 0.5,
+            scale: 60.0,
+            cap: 2.0,
+            file_cap: 4.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        BUMPY_ROAD,
+        RuleConfig {
+            base: 0.5,
+            scale: 2.0,
+            cap: 2.0,
+            file_cap: 4.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        COMPLEX_CONDITIONAL,
+        RuleConfig {
+            base: 0.4,
+            scale: 2.0,
+            cap: 1.5,
+            file_cap: 3.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        EXCESS_ARGUMENTS,
+        RuleConfig {
+            base: 0.4,
+            scale: 3.0,
+            cap: 1.5,
+            file_cap: 3.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        BRAIN_METHOD,
+        RuleConfig {
+            base: 1.5,
+            scale: 15.0,
+            cap: 3.0,
+            file_cap: 4.5,
+            weight: 1.0,
+        },
+    ),
+    (
+        CONSTRUCTOR_OVER_INJECTION,
+        RuleConfig {
+            base: 0.5,
+            scale: 3.0,
+            cap: 1.5,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        STRING_HEAVY_ARGUMENTS,
+        RuleConfig {
+            base: 0.3,
+            scale: 2.0,
+            cap: 1.0,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        PRIMITIVE_OBSESSION,
+        RuleConfig {
+            base: 0.4,
+            scale: 0.0,
+            cap: 0.4,
+            file_cap: 1.6,
+            weight: 1.0,
+        },
+    ),
+    (
+        CODE_DUPLICATION,
+        RuleConfig {
+            base: 0.8,
+            scale: 0.0,
+            cap: 0.8,
+            file_cap: 3.0,
+            weight: 1.0,
+        },
+    ),
+    // Cheaper per hit than a duplicated whole function, and grows with the copy count:
+    // the same block in eight places is a different problem from the same block twice.
+    (
+        DUPLICATED_BLOCK,
+        RuleConfig {
+            base: 0.3,
+            scale: 2.0,
+            cap: 1.2,
+            file_cap: 2.5,
+            weight: 1.0,
+        },
+    ),
     // Test-specific
-    (LARGE_ASSERTION_BLOCKS, RuleConfig { base: 0.3, scale: 8.0, cap: 1.0, file_cap: 2.0, weight: 1.0 }),
-    (DUPLICATED_ASSERTION_BLOCKS, RuleConfig { base: 0.4, scale: 0.0, cap: 0.4, file_cap: 2.0, weight: 1.0 }),
+    (
+        LARGE_ASSERTION_BLOCKS,
+        RuleConfig {
+            base: 0.3,
+            scale: 8.0,
+            cap: 1.0,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        DUPLICATED_ASSERTION_BLOCKS,
+        RuleConfig {
+            base: 0.4,
+            scale: 0.0,
+            cap: 0.4,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
     // File / module level
-    (FILE_SIZE, RuleConfig { base: 0.5, scale: 500.0, cap: 2.0, file_cap: 2.0, weight: 1.0 }),
-    (DECLARATION_SIZE, RuleConfig { base: 0.3, scale: 300.0, cap: 1.0, file_cap: 1.0, weight: 1.0 }),
-    (FUNCTION_COUNT, RuleConfig { base: 0.4, scale: 15.0, cap: 1.5, file_cap: 1.5, weight: 1.0 }),
-    (OVERALL_COMPLEXITY, RuleConfig { base: 0.6, scale: 4.0, cap: 2.5, file_cap: 2.5, weight: 1.0 }),
-    (BRAIN_CLASS, RuleConfig { base: 1.5, scale: 0.0, cap: 1.5, file_cap: 3.0, weight: 1.0 }),
-    (LOW_COHESION, RuleConfig { base: 0.6, scale: 2.0, cap: 2.0, file_cap: 2.0, weight: 1.0 }),
+    (
+        FILE_SIZE,
+        RuleConfig {
+            base: 0.5,
+            scale: 500.0,
+            cap: 2.0,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        DECLARATION_SIZE,
+        RuleConfig {
+            base: 0.3,
+            scale: 300.0,
+            cap: 1.0,
+            file_cap: 1.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        FUNCTION_COUNT,
+        RuleConfig {
+            base: 0.4,
+            scale: 15.0,
+            cap: 1.5,
+            file_cap: 1.5,
+            weight: 1.0,
+        },
+    ),
+    (
+        OVERALL_COMPLEXITY,
+        RuleConfig {
+            base: 0.6,
+            scale: 4.0,
+            cap: 2.5,
+            file_cap: 2.5,
+            weight: 1.0,
+        },
+    ),
+    (
+        BRAIN_CLASS,
+        RuleConfig {
+            base: 1.5,
+            scale: 0.0,
+            cap: 1.5,
+            file_cap: 3.0,
+            weight: 1.0,
+        },
+    ),
+    (
+        LOW_COHESION,
+        RuleConfig {
+            base: 0.6,
+            scale: 2.0,
+            cap: 2.0,
+            file_cap: 2.0,
+            weight: 1.0,
+        },
+    ),
 ];

@@ -2,7 +2,8 @@
 
 use super::args::{CheckArgs, DeltaArgs, ExplainArgs, GateArgs, ScanArgs};
 use super::output::{
-    guidance_for, one_rule_as_json, print_json, rules_as_json, style, thresholds_as_json,
+    guidance_for, one_rule_as_json, print_json, report_as_json, rules_as_json, style,
+    thresholds_as_json,
 };
 use super::{EXIT_ERROR, EXIT_GATE_FAILED, EXIT_OK};
 use crate::analyze;
@@ -54,15 +55,44 @@ pub(super) fn base_of(targets: &[PathBuf]) -> PathBuf {
     }
 }
 
+/// Resolve the targets, find the directory config hangs off, and load the profile.
+///
+/// `scan` and `check` open with exactly this, and the flag has to be folded in at both.
+struct Target {
+    paths: Vec<PathBuf>,
+    base: PathBuf,
+    profile: Profile,
+}
+
+fn prepare(
+    paths: Vec<PathBuf>,
+    args: &super::args::ProfileArgs,
+    include_worktrees: bool,
+) -> Result<Target, ExitCode> {
+    let paths = resolve_targets(paths)?;
+    let base = base_of(&paths);
+    let mut profile = load(&base, args.profile_path.as_deref())?;
+    // The flag turns worktrees on; it never turns them off, so a config that asked for
+    // them is not silently overridden by its absence.
+    profile.scan_worktrees |= include_worktrees;
+    Ok(Target {
+        paths,
+        base,
+        profile,
+    })
+}
+
 pub fn run_scan(args: ScanArgs) -> Result<ExitCode, ExitCode> {
-    let targets = resolve_targets(args.paths)?;
-    let base = base_of(&targets);
-    let loaded = load(&base, args.profile.profile_path.as_deref())?;
+    let Target {
+        paths: targets,
+        base,
+        profile: loaded,
+    } = prepare(args.paths, &args.profile, args.include_worktrees)?;
     let mut cache = open_cache(Some(&base), &loaded, !args.no_cache);
     let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
 
     if args.json {
-        let mut value = serde_json::to_value(&report).expect("serialisable");
+        let mut value = report_as_json(&report);
         if args.guidance {
             value
                 .as_object_mut()
@@ -87,7 +117,10 @@ pub fn run_scan(args: ScanArgs) -> Result<ExitCode, ExitCode> {
         return Ok(ExitCode::from(EXIT_OK));
     }
     if !args.json {
-        eprintln!("score {:.2} is below the required {minimum:.2}", report.score);
+        eprintln!(
+            "score {:.2} is below the required {minimum:.2}",
+            report.score
+        );
     }
     Ok(ExitCode::from(EXIT_GATE_FAILED))
 }
@@ -115,7 +148,11 @@ pub fn run_delta(args: DeltaArgs) -> Result<ExitCode, ExitCode> {
     }
 
     let failed = report.score_change < -args.max_drop.abs();
-    Ok(ExitCode::from(if failed { EXIT_GATE_FAILED } else { EXIT_OK }))
+    Ok(ExitCode::from(if failed {
+        EXIT_GATE_FAILED
+    } else {
+        EXIT_OK
+    }))
 }
 
 pub fn run_gate(args: GateArgs) -> Result<ExitCode, ExitCode> {
@@ -140,13 +177,19 @@ pub fn run_gate(args: GateArgs) -> Result<ExitCode, ExitCode> {
     } else {
         render::render_gate(&report, &style());
     }
-    Ok(ExitCode::from(if report.passed() { EXIT_OK } else { EXIT_GATE_FAILED }))
+    Ok(ExitCode::from(if report.passed() {
+        EXIT_OK
+    } else {
+        EXIT_GATE_FAILED
+    }))
 }
 
 pub fn run_check(args: CheckArgs) -> Result<ExitCode, ExitCode> {
-    let targets = resolve_targets(args.paths)?;
-    let base = base_of(&targets);
-    let loaded = load(&base, args.profile.profile_path.as_deref())?;
+    let Target {
+        paths: targets,
+        base,
+        profile: loaded,
+    } = prepare(args.paths, &args.profile, args.include_worktrees)?;
     let mut cache = open_cache(None, &loaded, false);
     let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
     render::render_check(&report);
@@ -161,11 +204,12 @@ pub fn run_check(args: CheckArgs) -> Result<ExitCode, ExitCode> {
     }
 
     let failed = args.fail_on_findings && report.findings_count() > 0;
-    Ok(ExitCode::from(if failed { EXIT_GATE_FAILED } else { EXIT_OK }))
+    Ok(ExitCode::from(if failed {
+        EXIT_GATE_FAILED
+    } else {
+        EXIT_OK
+    }))
 }
-
-
-
 
 fn list_thresholds(profile: &Profile, as_json: bool, style: &Style) {
     if as_json {

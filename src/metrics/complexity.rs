@@ -7,7 +7,7 @@ use tree_sitter::Node;
 use super::*;
 
 pub(crate) fn is_boolean_operator(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    if !spec.boolean_op_nodes.contains(node.kind()) {
+    if !is_kind(node, &spec.boolean_op_nodes) {
         return false;
     }
     match node.child_by_field_name("operator") {
@@ -24,9 +24,9 @@ pub fn cyclomatic_complexity(node: &Node, spec: &LanguageSpec, source: &[u8]) ->
         if current.id() == node.id() {
             continue;
         }
-        if spec.decision_nodes.contains(current.kind())
-            || is_boolean_operator(&current, spec, source)
-        {
+        let is_decision = is_kind(&current, &spec.decision_nodes)
+            && !spec.linear_branch.is_some_and(|linear| linear(&current, source));
+        if is_decision || is_boolean_operator(&current, spec, source) {
             complexity += 1;
         }
     }
@@ -34,10 +34,22 @@ pub fn cyclomatic_complexity(node: &Node, spec: &LanguageSpec, source: &[u8]) ->
 }
 
 /// True for the `if` of an `else if`, which reads flat, not nested.
+///
+/// Two shapes to recognise: a clause node wrapping the continuation (Python's
+/// `elif_clause`, TS's `else_clause`), and a bare `if` hanging off a field of the outer
+/// one, which is how Go writes it.
 pub(crate) fn continues_branch(node: &Node, spec: &LanguageSpec) -> bool {
-    node.parent()
-        .map(|parent| spec.continuation_nodes.contains(parent.kind()))
-        .unwrap_or(false)
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if is_kind(&parent, &spec.continuation_nodes) {
+        return true;
+    }
+    spec.continuation_fields.iter().any(|field| {
+        parent
+            .child_by_field_name(field)
+            .is_some_and(|child| child.id() == node.id())
+    })
 }
 
 /// Deepest run of nested control-flow constructs inside `node`.
@@ -49,7 +61,7 @@ pub fn nesting_depth(node: &Node, spec: &LanguageSpec, source: &[u8]) -> usize {
                 continue;
             }
             let mut child_depth = depth;
-            if spec.nesting_nodes.contains(child.kind()) && !continues_branch(&child, spec) {
+            if is_kind(&child, &spec.nesting_nodes) && !continues_branch(&child, spec) {
                 child_depth = depth + 1;
             }
             deepest = deepest.max(visit(&child, child_depth, spec, source));
@@ -59,14 +71,28 @@ pub fn nesting_depth(node: &Node, spec: &LanguageSpec, source: &[u8]) -> usize {
     visit(node, 0, spec, source)
 }
 
-pub fn function_body<'tree>(node: &Node<'tree>, _spec: &LanguageSpec) -> Option<Node<'tree>> {
-    if let Some(body) = node.child_by_field_name("body") {
+/// The node holding a callable's statements.
+///
+/// Every rule that reads a body statement by statement -- bumpy road, stub bodies,
+/// single-statement accessors -- goes through here, so the wrapper has to be unwrapped
+/// once, in one place. Go's `block` is exactly that: a wrapper around the
+/// `statement_list` that holds the statements.
+pub fn function_body<'tree>(node: &Node<'tree>, spec: &LanguageSpec) -> Option<Node<'tree>> {
+    let body = node.child_by_field_name("body").or_else(|| {
+        named_children(node)
+            .into_iter()
+            .rev()
+            .find(|child| matches!(child.kind(), "block" | "statement_block"))
+    })?;
+    // Only when the body is not itself a statement container: a TS function whose body
+    // happens to be one bare `{ .. }` block is a statement, not a wrapper.
+    if is_kind(&body, &spec.statement_containers) {
         return Some(body);
     }
-    named_children(node)
-        .into_iter()
-        .rev()
-        .find(|child| matches!(child.kind(), "block" | "statement_block"))
+    match named_children(&body).as_slice() {
+        [only] if is_kind(only, &spec.statement_containers) => Some(*only),
+        _ => Some(body),
+    }
 }
 
 /// A self-contained chunk of nested logic inside a function.
@@ -89,7 +115,7 @@ pub fn bumps(node: &Node, spec: &LanguageSpec, source: &[u8], min_depth: usize) 
             continue;
         }
         let mut depth = nesting_depth(&statement, spec, source);
-        if spec.nesting_nodes.contains(statement.kind()) {
+        if is_kind(&statement, &spec.nesting_nodes) {
             depth += 1;
         }
         if depth >= min_depth {
@@ -106,7 +132,7 @@ pub(crate) fn condition_nodes<'tree>(
 ) -> Vec<Node<'tree>> {
     let mut conditions = Vec::new();
     for current in own_nodes(node, spec, source) {
-        if !spec.decision_nodes.contains(current.kind()) {
+        if !is_kind(&current, &spec.decision_nodes) {
             continue;
         }
         if let Some(condition) = current.child_by_field_name("condition") {

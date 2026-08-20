@@ -1,7 +1,8 @@
 # Artifer Quality Score
 
-A deterministic, explainable code quality score for Python, TypeScript, JavaScript
-and Rust, plus the `<script>` block of Vue single-file components. One number per
+A deterministic, explainable code quality score for Python, TypeScript, JavaScript,
+Rust, Go, Ruby, Java and PHP, plus the `<script>` block of Vue and Svelte single-file
+components. One number per
 file from 1.0 to 10.0, with every deducted point traceable to a named code smell at
 a specific line.
 
@@ -231,6 +232,7 @@ File and module level:
 | Brain Class | large, many methods, and contains a Brain Method |
 | Low Cohesion | LCOM4 > 1 — methods form unrelated groups |
 | Code Duplication | two functions ≥ 15 LoC that are ≥ 85% structurally similar |
+| Duplicated Block | a run of ≥ 3 statements (≥ 30 tokens) repeated elsewhere in the file |
 
 Test files only:
 
@@ -238,6 +240,51 @@ Test files only:
 | --- | --- |
 | Large Assertion Blocks | > 8 consecutive assertions |
 | Duplicated Assertion Blocks | the same assertion block appears ≥ 2 times |
+
+### Observations — reported, never scored
+
+Some things are worth telling you about but must not move the number.
+
+| Observation | Fires when |
+| --- | --- |
+| Cross-File Duplication | the same function, structurally identical, in ≥ 2 files (≥ 5 LoC) |
+
+Every point the score deducts traces to one measurement inside one file. That is
+what makes a file's report a pure function of its own bytes, and `gate`, `delta`
+and the cache all rest on it. Pricing a cross-file fact would make your score
+depend on other files' contents and break that.
+
+But leaving it unmeasured is worse. The scored `Code Duplication` rule only
+compares functions *within* one file, so splitting a file that held two copies
+deletes the finding and **raises** the score for a change that made the code
+worse. For a metric built to be optimised against, a gradient pointing the wrong
+way is a defect.
+
+So observations are reported everywhere the score is — the `scan` summary,
+`check` output, `--json`, `--guidance` — and resolved the same way a finding is:
+fix it, or dismiss it with a reason.
+
+```ts
+// @aqs(disable:"Cross-File Duplication") the two hooks must not depend on each other
+function reportFailure(step: string, error: unknown) {
+```
+
+A dismissed observation stays in the report with its reason attached, exactly as
+a suppressed finding does. The count of *open* observations is the stopping
+condition — reach zero by fixing or by explaining, and the record of which you
+chose stays in the code.
+
+Matching is exact on normalised tokens: identifiers and literals are collapsed,
+so `confirmAction` and `confirmThing` match, but an 87%-similar pair does not.
+Test files are skipped — suites repeat their setup on purpose, and
+`Duplicated Assertion Blocks` is the test-side question.
+
+`gate` prints observations a branch introduced and never fails on them. That is
+not a half-measure: the branch this catches — one that copies a function into a
+second file — moves no score at all, so the only run it would ever appear on is
+a passing one. Gating on it would price the observation through the back door.
+An observation already in the baseline is not reported again, and dismissing one
+counts as resolving it.
 
 ### Design decisions worth knowing
 
@@ -263,6 +310,47 @@ Test files only:
 - **Rust `impl Trait for Type` is exempt from cohesion**, because the method set is
   dictated by the trait rather than chosen by the author — the same reasoning as
   abstract bases and `super()`-only overrides. Inherent `impl` blocks are judged.
+- **Go's `if err != nil { return err }` is not a branch**, for the same reason Rust's
+  `?` is not: it is the failure path going straight back out, not a decision the reader
+  holds in mind. Go just has no sugar to hide it, and counting it would judge a function
+  for how many things it calls that can fail. The exemption is narrow — no `else`, and
+  the body must end in `return`. An `if err != nil` that recovers and carries on *is* a
+  decision and still counts.
+- **A field reached by bare name is still a field.** Java, PHP and Ruby all let a method
+  read state without spelling out a receiver — `amount`, not `this.amount` — and the
+  class's own field list is the only thing separating that from a local variable. Without
+  it, a value object of six getters reads as six unrelated responsibilities.
+- **Java's `default` arm is not a decision**, and neither is PHP's `default =>`. Both
+  languages write it with the same node as a real `case`, so the exclusion TypeScript
+  gets from its grammar has to be made by hand.
+- **A class of `static` helpers is a namespace, not an object.** It holds no instance
+  state, so cohesion has nothing to judge — the same reasoning that exempts Ruby's
+  `def self.parse` and a Python `@staticmethod`.
+- **PHP markup is not code.** A `.php` file may be HTML with code islands in it, and a
+  line this tool cannot parse is a line it cannot explain a finding about, so it is not
+  counted. Blade templates are excluded outright, for the same reason a Vue
+  `<template>` is.
+- **Ruby reads `@field` and `attr_reader` as the same state.** A class that goes
+  through its own generated accessors -- `attr_reader :options`, then a bare `options` --
+  shares just as much state as one writing `@options`, and LCOM4 has to see both or
+  every method in such a class reads as its own responsibility.
+- **Ruby `def self.parse` is a namespace function, not a method.** It holds no instance
+  state, so cohesion must not count it as a responsibility — the same reasoning that
+  exempts a Python `@staticmethod` and a Rust associated function.
+- **A Ruby namespace module is not the class it wraps.** Methods belong to their
+  *nearest* enclosing class, so `module Billing` wrapping a class is not judged for
+  methods it did not write.
+- **A trailing `if`/`unless` does not nest.** `return nil unless valid?` is a guard
+  clause, and the whole reason to write it that way is that it does not indent the
+  method. It still counts as a branch.
+- **Go has no class rules.** Nothing in Go's syntax owns a type *and* its methods — a
+  method is a top-level declaration that names its receiver — so there is no class scope
+  to measure cohesion, size or method count over. Reading `type X struct` as the class
+  would report every type as having no methods, which is worse than saying nothing.
+- **Go's `NewThing(..)` is a constructor**, by the only convention the language has. The
+  capital after `New` is what keeps `Newlines` an ordinary function.
+- **Go parameters sharing a type count one each.** `func f(a, b, c int)` is a single
+  node in the grammar, but the caller still passes three arguments.
 - **Pure accessors are exempt from cohesion.** One statement, no branching and no
   calls, touching a field: a value object with six getters is not six unrelated jobs.
   The no-calls condition is load-bearing — `self.orders.append(o)` calls something, so
@@ -278,6 +366,26 @@ Test files only:
   directory pattern like `*/e2e/*` needs a leading segment and misses `e2e/flow.ts` —
   where Playwright actually puts its specs — so the same file would count as test code
   or production code depending on which directory you scanned from.
+- **Linked git worktrees are skipped by default.** A worktree is a second checkout of
+  the same repository, so scanning one scores every file twice: it skews the
+  LoC-weighted aggregate toward whichever branch is checked out there, and it makes
+  every function collide with its own original in the cross-file join. On a real repo
+  with five worktrees this was the difference between 523 files and 111, and between
+  93 cross-file observations and none.
+
+  It is detected, not guessed: a worktree root holds a `.git` *file* reading
+  `gitdir: …/.git/worktrees/<name>`. A directory merely *named* `trees/` is ordinary
+  source, and a submodule — same file form, but `…/.git/modules/<name>` — is part of
+  the project and stays in scope.
+
+  ```bash
+  aqs scan .                       # worktrees skipped
+  aqs scan . --include-worktrees   # or "scan_worktrees": true in .aqs.json
+  aqs scan trees/epic-0/feature    # naming one directly always works
+  ```
+
+  `delta` and `gate` are unaffected — they read files out of git revisions, where a
+  worktree's contents never appear.
 
 ## Configuration
 
@@ -295,12 +403,17 @@ target. Unknown rule or threshold names are a hard error, never silently ignored
     "Primitive Obsession": 0.0,
     "Complex Method": { "base": 0.8, "cap": 3.0 }
   },
-  "exclude_patterns": ["*/legacy/*"]
+  "exclude_patterns": ["*/legacy/*"],
+  "scan_worktrees": false
 }
 ```
 
 A rule's value can be a bare number (its weight, `0.0` disables it) or an object
 overriding `base`, `scale`, `cap`, `file_cap` or `weight`.
+
+`exclude_patterns`, `test_patterns` and `test_exempt_rules` **replace** their
+defaults rather than adding to them. `scan_worktrees` opts back into scanning
+linked git worktrees, which are skipped by default.
 
 Run `aqs explain --thresholds` for the full list of threshold names.
 
@@ -444,11 +557,39 @@ re-baselining.
 
 Be aware of these before treating the score as a target:
 
-- **Fragmentation is invisible.** Splitting a bad 300-line function across five
-  files will raise the score without improving the design. `Number of Functions
-  in a Single Module` catches within-module churning, but nothing catches
-  spreading logic thinly across new files. If you point a model at this metric,
-  review its diffs — do not just watch the number go up.
+- **Fragmentation is mostly invisible.** Splitting a bad 300-line function across
+  five files will raise the score without improving the design. `Number of
+  Functions in a Single Module` catches within-module churning, and the
+  Cross-File Duplication observation now catches the case where a split leaves
+  identical copies behind — but nothing catches logic merely spread thinly across
+  new files. If you point a model at this metric, review its diffs — do not just
+  watch the number go up.
+- **Repeated blocks are only seen within one file.** `Duplicated Block` covers
+  fragments inside a single file and Cross-File Duplication covers whole
+  functions across files, but a three-line block repeated across *different*
+  files falls between them. Catching that needs a repository-wide block index,
+  which is a different order of cost from the per-function hash join.
+- **A grammar only parses the syntax it was pinned at.** The grammars are pinned
+  exactly, because a bump can rename AST nodes and silently change every score — which
+  means brand-new syntax parses as an error until the pin moves. Java 25's statements
+  before `super()` is the live example: 3 of 950 JDK files hit it. A file with syntax
+  errors is still scored, on the part that parsed, and reports its error count in
+  `syntax_errors` rather than failing.
+- **Dead code, unused exports and consistency are not measured.** Nothing here
+  looks at reachability or at whether sibling modules resemble each other. A file
+  full of functions nobody calls scores 10.00.
+- **Cross-File Duplication is very sensitive to copied trees.** Any second copy of
+  the same code inside the scan root — a vendored dependency, a backup directory,
+  an unpacked archive — turns *every* function in it into an observation against
+  its own original. Linked git worktrees are detected and skipped for exactly this
+  reason (see below); anything else you have to exclude yourself:
+
+  ```json
+  { "exclude_patterns": ["*/vendor/*", "*/.backup/*"] }
+  ```
+
+  Note that `exclude_patterns` **replaces** the defaults rather than adding to
+  them, so copy the list from `Configuration` before editing it.
 - **Naming, correctness and API design are not measured at all.** A perfectly
   scored file can still be wrong and unreadable. This measures structure.
 - **Declarative framework signatures trip the argument rules.** A Typer/Click
@@ -607,8 +748,8 @@ The architecture keeps detection and scoring strictly separate:
 
 | Module | Responsibility |
 | --- | --- |
-| `languages` | per-language AST vocabulary — add a language here, no detector changes |
-| `vue` | reduces a single-file component to its script, in place |
+| `languages` | per-language AST vocabulary, one module each — add a language here |
+| `sfc` | reduces a Vue or Svelte single-file component to its script, in place |
 | `metrics` | AST measurement primitives (complexity, nesting, bumps, LoC) |
 | `detectors` | the rule catalogue; reports measurements, knows nothing about points |
 | `profile` | thresholds and weights — the entire scoring policy |

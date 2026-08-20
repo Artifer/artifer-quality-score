@@ -62,7 +62,10 @@ pub fn resolve_baseline(repo: &Path, reference: &str, use_merge_base: bool) -> R
     if !use_merge_base {
         // Always resolve to a concrete SHA: a report that records "HEAD~5" as its
         // baseline is not reproducible tomorrow.
-        let resolved = git(repo, &["rev-parse", "--verify", &format!("{reference}^{{commit}}")])?;
+        let resolved = git(
+            repo,
+            &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
+        )?;
         let trimmed = resolved.trim().to_string();
         if trimmed.is_empty() {
             bail!("cannot resolve {reference}");
@@ -198,8 +201,10 @@ pub fn scan_revision(
     let mut reports: Vec<FileReport> = Vec::new();
 
     for chunk in paths.chunks(BLOB_CHUNK_SIZE) {
-        let revisions: Vec<String> =
-            chunk.iter().map(|path| format!("{revision}:{path}")).collect();
+        let revisions: Vec<String> = chunk
+            .iter()
+            .map(|path| format!("{revision}:{path}"))
+            .collect();
         let blobs = read_blobs(repo, &revisions)?;
 
         let mut jobs: Vec<AnalysisJob> = Vec::new();
@@ -211,13 +216,17 @@ pub fn scan_revision(
         reports.extend(analyze_jobs(&jobs, profile, cache));
     }
 
-    let scored: Vec<FileReport> =
-        reports.iter().filter(|r| r.error.is_none()).cloned().collect();
+    let scored: Vec<FileReport> = reports
+        .iter()
+        .filter(|r| r.error.is_none())
+        .cloned()
+        .collect();
     Ok(ScanReport {
         version: VERSION.to_string(),
         profile: profile.name.clone(),
         score: aggregate_score(&scored),
         loc: scored.iter().map(|r| r.loc).sum(),
+        observations: crate::clones::cross_file_duplication(&reports),
         files: reports,
     })
 }

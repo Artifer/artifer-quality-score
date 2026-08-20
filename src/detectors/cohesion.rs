@@ -5,18 +5,31 @@
 
 use super::*;
 
+/// The methods belonging to one class.
+///
+/// The *nearest* enclosing class, not any enclosing class. A nested class's methods are
+/// its own, and a Ruby namespace (`module Billing` wrapping a class) would otherwise be
+/// judged for every method in the file as though it had written them itself.
 pub(crate) fn class_methods<'a, 'tree>(
     class_node: &Node,
     ctx: &'a FileContext<'tree, '_>,
 ) -> Vec<&'a FunctionContext<'tree>> {
     ctx.functions
         .iter()
-        .filter(|f| {
-            f.node.start_byte() >= class_node.start_byte()
-                && f.node.end_byte() <= class_node.end_byte()
-                && f.node.id() != class_node.id()
-        })
+        .filter(|f| enclosing_class(&f.node, ctx).is_some_and(|c| c.id() == class_node.id()))
         .collect()
+}
+
+/// The innermost class-like node a function sits in.
+fn enclosing_class<'tree>(node: &Node<'tree>, ctx: &FileContext<'tree, '_>) -> Option<Node<'tree>> {
+    let mut current = node.parent();
+    while let Some(candidate) = current {
+        if metrics::is_kind(&candidate, &ctx.spec.class_nodes) {
+            return Some(candidate);
+        }
+        current = candidate.parent();
+    }
+    None
 }
 
 /// A large, many-method class that also contains a Brain Method.
@@ -56,30 +69,113 @@ pub(crate) fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     }
 }
 
-/// Instance fields a method touches (`self.x` / `this.x`).
+/// Instance fields a method touches (`self.x`, `this.x`, `@x`).
 pub(crate) fn self_attributes(f: &FunctionContext, ctx: &FileContext) -> HashSet<String> {
     let mut fields = HashSet::new();
     for node in metrics::own_nodes(&f.node, ctx.spec, ctx.source) {
-        // Python `attribute`, TS/JS `member_expression`, Rust `field_expression` — the
-        // same construct under three names, with three sets of field names.
-        if !matches!(node.kind(), "attribute" | "member_expression" | "field_expression") {
+        // Ruby names instance state in one node, with no receiver to check.
+        if metrics::is_kind(&node, &ctx.spec.instance_field_nodes) {
+            let name = metrics::text(&node, ctx.source).trim_start_matches('@');
+            fields.insert(name.to_string());
+            continue;
+        }
+        if !metrics::FIELD_ACCESS_NODES.contains(&node.kind()) {
             continue;
         }
         let object = node
             .child_by_field_name("object")
             .or_else(|| node.child_by_field_name("value"));
         let Some(object) = object else { continue };
+        // The same construct under six names, with six sets of field names.
         let attribute = node
             .child_by_field_name("attribute")
             .or_else(|| node.child_by_field_name("property"))
-            .or_else(|| node.child_by_field_name("field"));
+            .or_else(|| node.child_by_field_name("field"))
+            .or_else(|| node.child_by_field_name("name"));
         let Some(attribute) = attribute else { continue };
         let receiver = metrics::text(&object, ctx.source);
-        if receiver == "self" || receiver == "this" {
+        if metrics::SELF_RECEIVERS.contains(&receiver) {
             fields.insert(metrics::text(&attribute, ctx.source).to_string());
         }
     }
     fields
+}
+
+/// Sibling methods a function calls on itself.
+///
+/// Where a self-call carries a receiver (`self.helper()`, `this.helper()`) it is already
+/// indistinguishable from a field read, and `self_attributes` has it. Ruby calls a
+/// sibling by bare name, so those have to be collected separately -- and kept *out* of
+/// the field set, where two methods both calling `puts` would read as shared state.
+pub(crate) fn self_calls(f: &FunctionContext, ctx: &FileContext) -> HashSet<String> {
+    if !ctx.spec.implicit_self_calls {
+        return self_attributes(f, ctx);
+    }
+    let nodes = metrics::own_nodes(&f.node, ctx.spec, ctx.source);
+    // Names that belong to somebody else: `other.format_line` is not a call on self.
+    let foreign: HashSet<usize> = nodes
+        .iter()
+        .filter(|node| node.kind() == "call")
+        .filter(|node| match node.child_by_field_name("receiver") {
+            None => false,
+            Some(receiver) => metrics::text(&receiver, ctx.source) != "self",
+        })
+        .filter_map(|node| node.child_by_field_name("method"))
+        .map(|name| name.id())
+        .collect();
+
+    let mut called = self_attributes(f, ctx);
+    for node in &nodes {
+        // Every other bare name is a call on self. Ruby writes `format_line(n)`,
+        // `count_orders` and a local variable identically, and only names matching a
+        // sibling method are ever used -- so a local that shares one costs nothing.
+        if node.kind() == "identifier" && !foreign.contains(&node.id()) {
+            called.insert(metrics::text(node, ctx.source).to_string());
+        }
+    }
+    called
+}
+
+/// The names a class stores state under: every `@field` anywhere in its body.
+///
+/// Ruby reads a field through a generated accessor as often as through `@options`
+/// directly -- `attr_reader :options`, and from then on a bare `options` -- and the two
+/// are the same field. Without this, a class whose methods all go through its own
+/// accessors shares no state at all as far as LCOM4 can see, and every method reads as a
+/// separate responsibility. The set is empty for languages that spell a field access
+/// out, which makes the accessor step below a no-op there.
+fn declared_fields(class_node: &Node, ctx: &FileContext) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for node in metrics::all_nodes(class_node) {
+        // Ruby: every `@field` the class mentions, which is where the name lives.
+        if metrics::is_kind(&node, &ctx.spec.instance_field_nodes) {
+            names.insert(field_name(metrics::text(&node, ctx.source)));
+            continue;
+        }
+        // Java: a `field_declaration`, which names one field per declarator.
+        if metrics::is_kind(&node, &ctx.spec.field_declaration_nodes) {
+            names.extend(declared_names(&node, ctx));
+        }
+    }
+    names
+}
+
+/// A field's name without the sigil its language writes it with: Ruby's `@amount` and
+/// PHP's `$amount` are read back as a bare `amount`.
+fn field_name(raw: &str) -> String {
+    raw.trim_start_matches(['@', '$']).to_string()
+}
+
+/// The names one field declaration introduces. `private String a, b;` declares two.
+fn declared_names(declaration: &Node, ctx: &FileContext) -> Vec<String> {
+    let named = |node: &Node| {
+        node.child_by_field_name("name")
+            .map(|name| field_name(metrics::text(&name, ctx.source)))
+    };
+    if let Some(name) = named(declaration) {
+        return vec![name];
+    }
+    metrics::all_nodes(declaration).iter().filter_map(named).collect()
 }
 
 /// Disjoint-set over method names, for counting connected components.
@@ -134,11 +230,22 @@ impl Components {
 fn lcom4(
     counted: &[&FunctionContext],
     connecting: &[&FunctionContext],
+    declared: &HashSet<String>,
     ctx: &FileContext,
 ) -> usize {
+    let calls: HashMap<&str, HashSet<String>> = connecting
+        .iter()
+        .map(|f| (f.name.as_str(), self_calls(f, ctx)))
+        .collect();
     let fields: HashMap<&str, HashSet<String>> = connecting
         .iter()
-        .map(|f| (f.name.as_str(), self_attributes(f, ctx)))
+        .map(|f| {
+            let mut touched = self_attributes(f, ctx);
+            // A bare name that matches one of the class's fields is that field, read
+            // through its accessor.
+            touched.extend(calls[f.name.as_str()].intersection(declared).cloned());
+            (f.name.as_str(), touched)
+        })
         .collect();
     let names: HashSet<&str> = connecting.iter().map(|f| f.name.as_str()).collect();
     let mut components = Components::new(connecting.iter().map(|f| f.name.clone()));
@@ -151,7 +258,7 @@ fn lcom4(
             }
         }
         // So does one calling the other.
-        for called in fields[f.name.as_str()].iter().filter(|n| names.contains(n.as_str())) {
+        for called in calls[f.name.as_str()].iter().filter(|n| names.contains(n.as_str())) {
             components.union(&f.name, called);
         }
     }
@@ -173,22 +280,27 @@ pub(crate) fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         let instance_methods: Vec<&FunctionContext> = class_methods(&class_node, ctx)
             .into_iter()
             .filter(|f| {
+                let is_namespaced = ctx
+                    .spec
+                    .namespace_function
+                    .is_some_and(|is_namespace| is_namespace(&f.node, ctx.source));
                 let has_instance = !ctx.spec.explicit_receiver
                     || metrics::has_receiver(&f.node, ctx.spec, ctx.source);
-                has_instance && !f.is_constructor
+                has_instance && !is_namespaced && !f.is_constructor
             })
             .collect();
+        let declared = declared_fields(&class_node, ctx);
         // Accessors connect fields but are not responsibilities of their own.
         let methods: Vec<&FunctionContext> = instance_methods
             .iter()
             .copied()
-            .filter(|f| !metrics::is_pure_accessor(&f.node, ctx.spec, ctx.source))
+            .filter(|f| !metrics::is_pure_accessor(&f.node, ctx.spec, ctx.source, &declared))
             .collect();
         if methods.len() < 2 {
             continue;
         }
 
-        let components = lcom4(&methods, &instance_methods, ctx);
+        let components = lcom4(&methods, &instance_methods, &declared, ctx);
         if (components as f64) <= threshold {
             continue;
         }

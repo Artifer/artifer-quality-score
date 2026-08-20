@@ -20,6 +20,10 @@ pub(crate) const NAMING_PARENTS: &[&str] = &[
     "field_definition",
     // Rust binds a closure with `let name = |..| ..`, naming it via `pattern`.
     "let_declaration",
+    // Go: `helper := func() {..}`, `var helper = func() {..}`.
+    "short_var_declaration",
+    "var_spec",
+    "assignment_statement",
 ];
 
 /// The function's name, or None if it is a genuinely anonymous callback.
@@ -47,7 +51,12 @@ pub(crate) fn property_name(node: &Node, source: &[u8]) -> Option<String> {
 /// `const load = async () => {}` and `let f = |x| ..` are named units even though the
 /// closure itself is anonymous; the name comes from what it is bound to.
 pub(crate) fn binding_name(node: &Node, source: &[u8]) -> Option<String> {
-    let parent = node.parent()?;
+    let mut parent = node.parent()?;
+    // Go puts both sides of `helper := func() {..}` in an `expression_list`, so the
+    // binding that names the closure is one level further up.
+    if parent.kind() == "expression_list" {
+        parent = parent.parent()?;
+    }
     if !NAMING_PARENTS.contains(&parent.kind()) {
         return None;
     }
@@ -70,7 +79,7 @@ pub fn class_name(node: &Node, source: &[u8]) -> Option<String> {
 
 /// Whether `node` is a function measured as its own unit.
 pub fn is_scope_boundary(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    spec.function_nodes.contains(node.kind()) && function_name(node, source).is_some()
+    is_kind(node, &spec.function_nodes) && function_name(node, source).is_some()
 }
 
 /// Every named function in the tree, outermost first.

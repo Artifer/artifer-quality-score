@@ -25,7 +25,7 @@
 //! Suppressions are never silent: every report counts them, and `--json` lists each one
 //! with its reason so a reviewer can audit what a branch chose to ignore.
 
-use crate::profile::RULE_DEFAULTS;
+use crate::profile::{OBSERVATION_CATEGORIES, RULE_DEFAULTS};
 use anyhow::{bail, Result};
 
 /// The marker introducing a function-scoped directive.
@@ -54,8 +54,10 @@ impl Directive {
     }
 }
 
+/// Observations are dismissible by the same directives that suppress findings — the
+/// resolution is "fix it or say why", and that is the same decision either way.
 fn known_category(name: &str) -> bool {
-    RULE_DEFAULTS.iter().any(|(rule, _)| *rule == name)
+    RULE_DEFAULTS.iter().any(|(rule, _)| *rule == name) || OBSERVATION_CATEGORIES.contains(&name)
 }
 
 /// Extract the `disable:"..."` names and the `disable-all` flag from a directive body.
@@ -220,7 +222,11 @@ mod tests {
             "/* @aqs(disable:\"Complex Method\", disable:\"Large Method\") generated */",
         ] {
             let directive = parse(text).unwrap().expect("a directive");
-            assert_eq!(directive.categories, vec!["Complex Method", "Large Method"], "{text}");
+            assert_eq!(
+                directive.categories,
+                vec!["Complex Method", "Large Method"],
+                "{text}"
+            );
         }
     }
 
@@ -255,7 +261,10 @@ mod tests {
         // A directive that quietly does nothing is worse than one that fails loudly.
         let error = parse("// @aqs(disable:\"Complex Methd\") typo").unwrap_err();
         assert!(format!("{error}").contains("unknown rule"), "{error}");
-        assert!(format!("{error}").contains("a.rs:7"), "should locate it: {error}");
+        assert!(
+            format!("{error}").contains("a.rs:7"),
+            "should locate it: {error}"
+        );
     }
 
     #[test]

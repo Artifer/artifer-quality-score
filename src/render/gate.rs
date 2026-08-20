@@ -42,20 +42,30 @@ pub(crate) fn render_gate_header(report: &GateReport, style: &Style) {
             style.paint(&detail, DIM)
         );
     }
-    println!("  {}{}", style.paint("change    ", DIM), style.change(report.score_change));
+    println!(
+        "  {}{}",
+        style.paint("change    ", DIM),
+        style.change(report.score_change)
+    );
     println!();
 }
 
 pub(crate) fn render_gate_files(report: &GateReport, style: &Style) {
     // Files that changed without moving their score are not interesting here; showing
     // them buries the files that actually caused the drop.
-    let moved: Vec<&FileDelta> =
-        report.files.iter().filter(|f| f.score_change != 0.0).collect();
+    let moved: Vec<&FileDelta> = report
+        .files
+        .iter()
+        .filter(|f| f.score_change != 0.0)
+        .collect();
     let unchanged = report.files.len() - moved.len();
 
     if !moved.is_empty() {
         let layout = Layout::for_width(style.width);
-        println!("  {}", style.paint("Changed files that moved the score", BOLD));
+        println!(
+            "  {}",
+            style.paint("Changed files that moved the score", BOLD)
+        );
         for file in moved {
             delta_heading(file, style);
             delta_rows(file, &layout, style, false);
@@ -66,7 +76,10 @@ pub(crate) fn render_gate_files(report: &GateReport, style: &Style) {
     if unchanged > 0 {
         println!(
             "{}",
-            style.paint(&format!("  {unchanged} other changed file(s) held their score"), DIM)
+            style.paint(
+                &format!("  {unchanged} other changed file(s) held their score"),
+                DIM
+            )
         );
         println!();
     }
@@ -101,9 +114,53 @@ pub(crate) fn render_gate_verdict(report: &GateReport, style: &Style) {
     println!();
 }
 
+/// Observations this branch added.
+///
+/// Printed on a pass as well as a failure, and deliberately so. The branch this exists to
+/// catch — one that copies a function into a second file — moves no score at all, so the
+/// only run on which it would ever be seen is a passing one.
+pub(crate) fn render_gate_observations(report: &GateReport, style: &Style) {
+    if report.observations_introduced.is_empty() {
+        return;
+    }
+    println!(
+        "  {}{}",
+        style.paint(
+            &format!(
+                "Observations introduced ({})",
+                report.observations_introduced.len()
+            ),
+            BOLD
+        ),
+        style.paint("  ·  not scored, and not gated on", DIM)
+    );
+    for observation in &report.observations_introduced {
+        println!(
+            "    {}  {}",
+            style.paint(&observation.category, MAGENTA),
+            style.paint(&observation.details, DIM)
+        );
+        for site in &observation.sites {
+            println!(
+                "{}",
+                style.paint(
+                    &format!(
+                        "        {}:{}  {}",
+                        site.path,
+                        site.line,
+                        site.function.as_deref().unwrap_or("")
+                    ),
+                    DIM
+                )
+            );
+        }
+    }
+    println!();
+}
+
 pub fn render_gate(report: &GateReport, style: &Style) {
     render_gate_header(report, style);
     render_gate_files(report, style);
+    render_gate_observations(report, style);
     render_gate_verdict(report, style);
 }
-

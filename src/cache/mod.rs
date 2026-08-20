@@ -45,7 +45,10 @@ mod tests {
         stricter
             .thresholds
             .insert("function_cyclomatic_complexity_warning".into(), 3.0);
-        assert_ne!(profile_fingerprint(&profile), profile_fingerprint(&stricter));
+        assert_ne!(
+            profile_fingerprint(&profile),
+            profile_fingerprint(&stricter)
+        );
     }
 
     #[test]

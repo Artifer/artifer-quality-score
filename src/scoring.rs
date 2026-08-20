@@ -69,9 +69,7 @@ pub fn price_findings(raw: Vec<RawFinding>, profile: &Profile) -> Vec<Finding> {
             let a_penalty = rule.penalty(a.value, a.threshold);
             let b_penalty = rule.penalty(b.value, b.threshold);
             match b_penalty.partial_cmp(&a_penalty) {
-                Some(Ordering::Equal) | None => {
-                    a.range.start_line.cmp(&b.range.start_line)
-                }
+                Some(Ordering::Equal) | None => a.range.start_line.cmp(&b.range.start_line),
                 Some(other) => other,
             }
         });
@@ -106,8 +104,11 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
         function_ranges.insert(function.name.as_str(), function.range);
     }
 
-    let file_level: Vec<Finding> =
-        findings.iter().filter(|f| f.function.is_none()).cloned().collect();
+    let file_level: Vec<Finding> = findings
+        .iter()
+        .filter(|f| f.function.is_none())
+        .cloned()
+        .collect();
 
     // Insertion-ordered grouping by function name.
     let mut group_order: Vec<String> = Vec::new();
@@ -117,7 +118,10 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
             if !grouped.contains_key(name) {
                 group_order.push(name.clone());
             }
-            grouped.entry(name.clone()).or_default().push(finding.clone());
+            grouped
+                .entry(name.clone())
+                .or_default()
+                .push(finding.clone());
         }
     }
 
@@ -130,7 +134,11 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(smells[0].highlight_range);
-            FunctionReport { function: name, range, code_smells: smells }
+            FunctionReport {
+                function: name,
+                range,
+                code_smells: smells,
+            }
         })
         .collect();
     function_reports
@@ -150,5 +158,6 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
         syntax_errors: 0,
         suppressed: Vec::new(),
         directive_error: None,
+        fingerprints: Vec::new(),
     }
 }

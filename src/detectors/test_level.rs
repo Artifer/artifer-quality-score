@@ -10,7 +10,7 @@ use super::*;
 pub(crate) fn assertion_runs<'tree>(ctx: &FileContext<'tree, '_>) -> Vec<Vec<Node<'tree>>> {
     let mut runs = Vec::new();
     for node in metrics::all_nodes(&ctx.root) {
-        if !matches!(node.kind(), "block" | "statement_block" | "module" | "program") {
+        if !metrics::is_kind(&node, &ctx.spec.statement_containers) {
             continue;
         }
         let mut run: Vec<Node<'tree>> = Vec::new();

@@ -3,21 +3,27 @@ name = "aqs"
 version = "0.8.0"
 edition = "2021"
 rust-version = "1.80"
-description = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust and Vue"
+description = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust, Go, Ruby, Java, PHP, Vue and Svelte"
 
 [[bin]]
 name = "aqs"
 path = "src/main.rs"
 
 [dependencies]
-# Grammar pins are EXACT and match the Python reference implementation's wheels
-# byte for byte. A grammar bump can rename AST nodes and silently change every
-# score, so parity with the reference depends on these staying locked together.
+# Grammar pins are EXACT. The first four match the Python reference implementation's
+# wheels byte for byte; the rest were added after the reference was retired and are
+# pinned on the same principle. A grammar bump can rename AST nodes and silently change
+# every score, so parity depends on these staying locked together. Vue and Svelte need
+# no grammar of their own: the script inside a component is ordinary JS or TS.
 tree-sitter = "0.26"
 tree-sitter-python = "=0.25.0"
 tree-sitter-typescript = "=0.23.2"
 tree-sitter-javascript = "=0.23.1"
 tree-sitter-rust = "=0.24.2"
+tree-sitter-go = "=0.25.0"
+tree-sitter-ruby = "=0.23.1"
+tree-sitter-java = "=0.23.5"
+tree-sitter-php = "=0.24.2"
 
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

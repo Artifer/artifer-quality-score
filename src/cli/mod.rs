@@ -22,8 +22,8 @@ pub mod commands;
 pub mod output;
 
 use args::{Cli, Command};
-use commands::{run_check, run_delta, run_explain, run_gate, run_scan};
 use clap::Parser;
+use commands::{run_check, run_delta, run_explain, run_gate, run_scan};
 use std::process::ExitCode;
 
 const EXIT_OK: u8 = 0;

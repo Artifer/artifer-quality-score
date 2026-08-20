@@ -86,6 +86,27 @@ pub const TEST_PATTERNS: &[&str] = &[
     "*.spec.jsx",
     "*/__tests__/*",
     "*/e2e/*",
+    // Go's toolchain *requires* this suffix -- `go test` compiles nothing else -- so it
+    // is the one test-path convention a project cannot deviate from.
+    "*_test.go",
+    // Maven and Gradle both put tests under `src/test/java`, which the `*/test/*`
+    // pattern below already covers; these are the file-name conventions JUnit runners
+    // and the Surefire/Failsafe plugins look for.
+    "*Test.java",
+    "*Tests.java",
+    "*TestCase.java",
+    "*IT.java",
+    // PHPUnit's own convention, and the `tests/` directory the skeleton generates,
+    // which the `*/tests/*` patterns above already cover.
+    "*Test.php",
+    // RSpec and minitest. `spec/` is the RSpec default and `test/` the minitest one;
+    // neither is matched by the `tests/` patterns above.
+    "*_spec.rb",
+    "*_test.rb",
+    "*/spec/*",
+    "spec/*",
+    "*/test/*",
+    "test/*",
 ];
 
 pub const EXCLUDE_PATTERNS: &[&str] = &[
@@ -96,6 +117,12 @@ pub const EXCLUDE_PATTERNS: &[&str] = &[
     "*/__pycache__/*",
     "*/migrations/*",
     "*/.next/*",
+    // `next build && next export` writes its bundles to `out/_next/`, not `.next/`, so
+    // the pattern above misses a static export entirely. These are webpack chunks —
+    // minified, machine-generated, and nothing but repeated blocks: one docs site
+    // contributed 130 Duplicated Block findings before this was excluded.
+    "*/_next/*",
+    "_next/*",
     "*/dist/*",
     "*/build/*",
     "*/staticfiles/*",
@@ -103,6 +130,34 @@ pub const EXCLUDE_PATTERNS: &[&str] = &[
     "*.min.js",
     "*.d.ts",
     "*/coverage/*",
+    // `go mod vendor` copies whole dependency trees into the repository. It is other
+    // people's code, checked in verbatim, and scoring it would drown the project's own.
+    "*/vendor/*",
+    "vendor/*",
+    // protoc and grpc-gateway write these; nobody edits them.
+    "*.pb.go",
+    "*.pb.gw.go",
+    // Rails writes `db/schema.rb` from the migrations on every migrate, and it is
+    // thousands of lines of repeated `create_table` blocks. The migrations themselves
+    // are the Rails spelling of the `*/migrations/*` exclusion above.
+    "db/schema.rb",
+    "*/db/schema.rb",
+    "db/migrate/*",
+    "*/db/migrate/*",
+    // `bundle install --path vendor/bundle` puts every gem's source in the repository.
+    "*/.bundle/*",
+    // Build output: Maven and Gradle write here, and so does cargo.
+    "*/target/*",
+    "target/*",
+    // Composer installs every dependency's source here.
+    "*/vendor/composer/*",
+    // A Blade file is a template: mostly markup, with the logic expressed in
+    // directives this tool does not parse. `vue.rs` makes the same call for a
+    // `<template>` block -- a line it cannot parse is a line it cannot explain.
+    "*.blade.php",
+    // Annotation processors, protoc and friends write into these.
+    "*/generated/*",
+    "generated/*",
     "*/.mypy_cache/*",
     "*/.pytest_cache/*",
     // Vendored shadcn/ui primitives. These are generated third-party components, and
@@ -130,6 +185,9 @@ pub const TEST_EXEMPT_RULES: &[&str] = &[
     FUNCTION_COUNT,
     PRIMITIVE_OBSESSION,
     STRING_HEAVY_ARGUMENTS,
+    // Test code repeats its arrange/act shape by design, and `Duplicated Assertion
+    // Blocks` already asks the sharper version of this question about a suite.
+    DUPLICATED_BLOCK,
 ];
 
 impl<S: Into<String>> FromIterator<S> for PatternSet {

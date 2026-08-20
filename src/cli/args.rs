@@ -11,7 +11,7 @@ use std::path::PathBuf;
 #[command(
     name = "aqs",
     version = VERSION,
-    about = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust and Vue."
+    about = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust, Go, Ruby, Java, PHP, Vue and Svelte."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -47,6 +47,9 @@ pub struct ScanArgs {
     /// Disable the .aqs/ report cache.
     #[arg(long)]
     pub no_cache: bool,
+    /// Also scan linked git worktrees found inside the target.
+    #[arg(long)]
+    pub include_worktrees: bool,
     #[command(flatten)]
     pub profile: ProfileArgs,
 }
@@ -106,6 +109,9 @@ pub struct CheckArgs {
     /// Exit non-zero if anything is found.
     #[arg(long)]
     pub fail_on_findings: bool,
+    /// Also check linked git worktrees found inside the target.
+    #[arg(long)]
+    pub include_worktrees: bool,
     #[command(flatten)]
     pub profile: ProfileArgs,
 }
