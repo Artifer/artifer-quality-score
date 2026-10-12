@@ -51,6 +51,7 @@ fn last_statement_kind(block: &Node) -> Option<&'static str> {
     Some(last.kind())
 }
 
+// @aqs(disable:"Large Method") a vocabulary table, not logic; splitting it would hide it
 pub(super) fn spec() -> LanguageSpec {
     LanguageSpec {
         name: "go",
@@ -106,9 +107,25 @@ pub(super) fn spec() -> LanguageSpec {
         field_declaration_nodes: HashSet::new(),
         instance_field_nodes: HashSet::new(),
         primitive_types: set(&[
-            "bool", "string", "int", "int8", "int16", "int32", "int64", "uint", "uint8",
-            "uint16", "uint32", "uint64", "uintptr", "byte", "rune", "float32", "float64",
-            "complex64", "complex128",
+            "bool",
+            "string",
+            "int",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "uint",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "uintptr",
+            "byte",
+            "rune",
+            "float32",
+            "float64",
+            "complex64",
+            "complex128",
         ]),
         string_types: set(&["string", "*string", "[]byte"]),
         // A Go parameter carries its type in a `type` field rather than in a wrapper

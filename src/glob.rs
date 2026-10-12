@@ -18,9 +18,7 @@ use std::sync::{Mutex, OnceLock};
 /// past the closing bracket. An unterminated `[` is a literal, as in `fnmatch`.
 fn translate_class(chars: &[char], open_at: usize) -> (String, usize) {
     let mut close = open_at;
-    let leads_class = chars
-        .get(close)
-        .is_some_and(|c| *c == '!' || *c == ']');
+    let leads_class = chars.get(close).is_some_and(|c| *c == '!' || *c == ']');
     if leads_class {
         close += 1;
     }

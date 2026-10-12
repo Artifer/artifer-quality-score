@@ -51,8 +51,14 @@ pub(crate) fn delta_rows(file: &FileDelta, layout: &Layout, style: &Style, inclu
 /// The `  -1.20  path  (7.16 → 6.98)` heading for one changed file.
 pub(crate) fn delta_heading(file: &FileDelta, style: &Style) {
     let colour = if file.is_regression() { RED } else { GREEN };
-    let old = file.old_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "new".into());
-    let new = file.new_score.map(|s| format!("{s:.2}")).unwrap_or_else(|| "deleted".into());
+    let old = file
+        .old_score
+        .map(|s| format!("{s:.2}"))
+        .unwrap_or_else(|| "new".into());
+    let new = file
+        .new_score
+        .map(|s| format!("{s:.2}"))
+        .unwrap_or_else(|| "deleted".into());
     println!(
         "  {}  {}{}",
         style.change(file.score_change),
@@ -111,4 +117,3 @@ pub fn render_delta(report: &DeltaReport, style: &Style, threshold: f64) {
         println!();
     }
 }
-

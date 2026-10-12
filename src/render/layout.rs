@@ -47,7 +47,10 @@ impl Layout {
 
 pub(crate) fn penalty_text(finding: &Finding, style: &Style) -> String {
     if finding.penalty > 0.0 {
-        style.paint(&format!("{:>PENALTY_WIDTH$}", format!("-{:.2}", finding.penalty)), RED)
+        style.paint(
+            &format!("{:>PENALTY_WIDTH$}", format!("-{:.2}", finding.penalty)),
+            RED,
+        )
     } else {
         // Capped out: the finding is real, but this rule has already spent its
         // per-file budget, so fixing this one alone will not move the score.
@@ -85,8 +88,11 @@ pub(crate) fn file_findings(report: &FileReport) -> Vec<&Finding> {
         b.penalty
             .partial_cmp(&a.penalty)
             .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.highlight_range.start_line.cmp(&b.highlight_range.start_line))
+            .then_with(|| {
+                a.highlight_range
+                    .start_line
+                    .cmp(&b.highlight_range.start_line)
+            })
     });
     findings
 }
-

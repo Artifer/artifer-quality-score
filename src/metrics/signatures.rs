@@ -31,7 +31,10 @@ fn param_container<'tree>(node: &Node<'tree>, spec: &LanguageSpec) -> Option<Nod
 /// three arguments, so that is what Long Parameter List has to count.
 fn declared_count(param: &Node) -> usize {
     let mut cursor = param.walk();
-    param.children_by_field_name("name", &mut cursor).count().max(1)
+    param
+        .children_by_field_name("name", &mut cursor)
+        .count()
+        .max(1)
 }
 
 /// Declared parameters, excluding implicit receivers like `self`.
@@ -87,21 +90,32 @@ pub fn has_receiver(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
 pub fn parameter_type(param: &Node, spec: &LanguageSpec, source: &[u8]) -> Option<String> {
     for current in named_children(param) {
         if spec.type_annotation_nodes.contains(current.kind()) {
-            return Some(text(&current, source).trim_start_matches(':').trim().to_string());
+            return Some(
+                text(&current, source)
+                    .trim_start_matches(':')
+                    .trim()
+                    .to_string(),
+            );
         }
         // Python's typed_parameter nests the annotation under a `type` node.
         if current.kind() == "type" {
             return Some(text(&current, source).trim().to_string());
         }
     }
-    param
-        .child_by_field_name("type")
-        .map(|annotation| text(&annotation, source).trim_start_matches(':').trim().to_string())
+    param.child_by_field_name("type").map(|annotation| {
+        text(&annotation, source)
+            .trim_start_matches(':')
+            .trim()
+            .to_string()
+    })
 }
 
 pub(crate) fn bare_type(type_name: &str) -> &str {
     let trimmed = type_name.trim().trim_end_matches('?').trim();
-    trimmed.strip_suffix("| None").map(str::trim).unwrap_or(trimmed)
+    trimmed
+        .strip_suffix("| None")
+        .map(str::trim)
+        .unwrap_or(trimmed)
 }
 
 pub fn is_primitive_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
@@ -138,4 +152,3 @@ pub fn is_string_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
         }
     }
 }
-

@@ -16,7 +16,8 @@ use super::*;
 pub(crate) const ABSTRACT_BASES: &[&str] = &["ABC", "ABCMeta", "Protocol", "Interface"];
 
 /// Decorators that mark a method as having no implementation here.
-pub(crate) const ABSTRACT_DECORATORS: &[&str] = &["abstractmethod", "abstractproperty", "abc.abstract"];
+pub(crate) const ABSTRACT_DECORATORS: &[&str] =
+    &["abstractmethod", "abstractproperty", "abc.abstract"];
 
 pub fn class_nodes<'tree>(root: &Node<'tree>, spec: &LanguageSpec) -> Vec<Node<'tree>> {
     all_nodes(root)
@@ -50,7 +51,10 @@ pub(crate) fn has_stub_body(node: &Node, spec: &LanguageSpec, source: &[u8]) -> 
 }
 
 /// The one meaningful statement in a body, or None if there are none or several.
-pub(crate) fn sole_statement<'tree>(node: &Node<'tree>, spec: &LanguageSpec) -> Option<Node<'tree>> {
+pub(crate) fn sole_statement<'tree>(
+    node: &Node<'tree>,
+    spec: &LanguageSpec,
+) -> Option<Node<'tree>> {
     let body = function_body(node, spec)?;
     let mut only: Option<Node> = None;
     for statement in named_children(&body) {
@@ -172,7 +176,9 @@ pub(crate) fn has_abstract_decorator(node: &Node, source: &[u8]) -> bool {
         .filter(|current| matches!(current.kind(), "decorator" | "decorator_list"))
         .any(|current| {
             let decorator = text(current, source);
-            ABSTRACT_DECORATORS.iter().any(|marker| decorator.contains(marker))
+            ABSTRACT_DECORATORS
+                .iter()
+                .any(|marker| decorator.contains(marker))
         })
 }
 
@@ -219,4 +225,3 @@ pub fn is_abstract_class(node: &Node, spec: &LanguageSpec, source: &[u8]) -> boo
         || has_abstract_decorator(node, source)
         || is_all_stubs(node, spec, source)
 }
-

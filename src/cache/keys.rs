@@ -48,7 +48,6 @@ pub fn profile_fingerprint(profile: &Profile) -> String {
     hex(&digest[..8])
 }
 
-
 /// Cache key for one file.
 ///
 /// The path is part of the key because it decides test-vs-production treatment and is

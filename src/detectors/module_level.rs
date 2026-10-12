@@ -10,8 +10,7 @@ use super::*;
 /// time the TDD loop depends on.
 pub(crate) fn code_duplication(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     let min_loc = ctx.threshold("function_duplication_min_lines_of_code_for_check");
-    let min_similarity =
-        ctx.threshold("function_duplication_min_similarity_percentage") / 100.0;
+    let min_similarity = ctx.threshold("function_duplication_min_similarity_percentage") / 100.0;
 
     let candidates: Vec<(&FunctionContext, Vec<&str>)> = ctx
         .functions
@@ -106,7 +105,10 @@ pub(crate) fn declaration_size(ctx: &FileContext, out: &mut Vec<RawFinding>) {
 /// The wording changes with the count so the number stays one a reader can reproduce by
 /// counting the same things.
 fn counted_functions(ctx: &FileContext) -> (usize, &'static str) {
-    let shipped = ctx.functions.iter().filter(|f| !ctx.is_inline_test(&f.node));
+    let shipped = ctx
+        .functions
+        .iter()
+        .filter(|f| !ctx.is_inline_test(&f.node));
 
     if !crate::sfc::is_vue(&ctx.path) {
         return (shipped.count(), "functions");
@@ -161,4 +163,3 @@ pub(crate) fn overall_complexity(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         });
     }
 }
-

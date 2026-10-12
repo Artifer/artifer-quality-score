@@ -25,7 +25,9 @@ pub fn cyclomatic_complexity(node: &Node, spec: &LanguageSpec, source: &[u8]) ->
             continue;
         }
         let is_decision = is_kind(&current, &spec.decision_nodes)
-            && !spec.linear_branch.is_some_and(|linear| linear(&current, source));
+            && !spec
+                .linear_branch
+                .is_some_and(|linear| linear(&current, source));
         if is_decision || is_boolean_operator(&current, spec, source) {
             complexity += 1;
         }
@@ -165,4 +167,3 @@ pub fn complex_conditionals<'tree>(
     }
     found
 }
-

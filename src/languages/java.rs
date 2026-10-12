@@ -10,7 +10,11 @@ use tree_sitter::Node;
 /// TypeScript gets for free, where `switch_default` is a node kind of its own.
 fn is_default_label(node: &Node, source: &[u8]) -> bool {
     node.kind() == "switch_label"
-        && node.utf8_text(source).unwrap_or("").trim_start().starts_with("default")
+        && node
+            .utf8_text(source)
+            .unwrap_or("")
+            .trim_start()
+            .starts_with("default")
 }
 
 /// Whether a declaration carries the `static` modifier.
@@ -90,8 +94,22 @@ pub(super) fn spec() -> LanguageSpec {
         // Boxed types count too: `Integer` in a signature is the same missing domain
         // type as `int`, only nullable.
         primitive_types: set(&[
-            "byte", "short", "int", "long", "float", "double", "boolean", "char",
-            "String", "Byte", "Short", "Integer", "Long", "Float", "Double", "Boolean",
+            "byte",
+            "short",
+            "int",
+            "long",
+            "float",
+            "double",
+            "boolean",
+            "char",
+            "String",
+            "Byte",
+            "Short",
+            "Integer",
+            "Long",
+            "Float",
+            "Double",
+            "Boolean",
             "Character",
         ]),
         string_types: set(&["String", "CharSequence"]),

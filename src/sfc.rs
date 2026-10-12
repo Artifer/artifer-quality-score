@@ -26,8 +26,15 @@ use tree_sitter::Node;
 /// a god component, while saying nothing about how much behaviour a reader has
 /// to hold. What runs still counts: `methods`, `watch` handlers, `setup`, and
 /// the lifecycle hooks.
-const DECLARATIVE_OPTIONS: &[&str] =
-    &["props", "computed", "data", "components", "emits", "mixins", "inject"];
+const DECLARATIVE_OPTIONS: &[&str] = &[
+    "props",
+    "computed",
+    "data",
+    "components",
+    "emits",
+    "mixins",
+    "inject",
+];
 
 /// What an SFC's script turned out to be.
 pub struct Script {
@@ -110,7 +117,10 @@ pub fn extract(source: &[u8]) -> Script {
         out.push_str(if inside { line } else { blanked(line) });
     }
 
-    Script { source: out.into_bytes(), language }
+    Script {
+        source: out.into_bytes(),
+        language,
+    }
 }
 
 /// The object of the component's `export default`, if it has one.
@@ -155,8 +165,7 @@ pub fn declarative_ranges(root: &Node, source: &[u8]) -> Vec<(usize, usize)> {
     object
         .named_children(&mut cursor)
         .filter(|option| {
-            option_name(option, source)
-                .is_some_and(|name| DECLARATIVE_OPTIONS.contains(&name))
+            option_name(option, source).is_some_and(|name| DECLARATIVE_OPTIONS.contains(&name))
         })
         .map(|option| (option.start_byte(), option.end_byte()))
         .collect()
@@ -164,7 +173,9 @@ pub fn declarative_ranges(root: &Node, source: &[u8]) -> Vec<(usize, usize)> {
 
 /// Whether `byte` falls inside one of `ranges`.
 pub fn within(ranges: &[(usize, usize)], byte: usize) -> bool {
-    ranges.iter().any(|(start, end)| byte >= *start && byte < *end)
+    ranges
+        .iter()
+        .any(|(start, end)| byte >= *start && byte < *end)
 }
 
 #[cfg(test)]
@@ -202,9 +213,18 @@ mod tests {
     #[test]
     fn reads_the_lang_attribute() {
         assert_eq!(language(SFC), "javascript");
-        assert_eq!(language("<script lang=\"ts\">\nlet a: number = 1\n</script>\n"), "typescript");
-        assert_eq!(language("<script setup lang='ts'>\nlet a: number = 1\n</script>\n"), "typescript");
-        assert_eq!(language("<script setup>\nlet a = 1\n</script>\n"), "javascript");
+        assert_eq!(
+            language("<script lang=\"ts\">\nlet a: number = 1\n</script>\n"),
+            "typescript"
+        );
+        assert_eq!(
+            language("<script setup lang='ts'>\nlet a: number = 1\n</script>\n"),
+            "typescript"
+        );
+        assert_eq!(
+            language("<script setup>\nlet a = 1\n</script>\n"),
+            "javascript"
+        );
     }
 
     #[test]
@@ -272,7 +292,11 @@ mod tests {
             .into_iter()
             .map(|(start, _)| {
                 let text = String::from_utf8_lossy(&source[start..]);
-                text.split(['(', ':']).next().unwrap_or("").trim().to_string()
+                text.split(['(', ':'])
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string()
             })
             .collect()
     }
@@ -304,7 +328,10 @@ mod tests {
             assert!(!within(&ranges, at), "{option} should not be covered");
         }
         let computed = COMPONENT.find("total()").expect("getter is in the fixture");
-        assert!(within(&ranges, computed), "a computed getter should be covered");
+        assert!(
+            within(&ranges, computed),
+            "a computed getter should be covered"
+        );
     }
 
     #[test]
@@ -317,7 +344,8 @@ mod tests {
 
     #[test]
     fn keeps_windows_line_endings_intact() {
-        let source = "<template>\r\n<p/>\r\n</template>\r\n<script>\r\nconst a = 1\r\n</script>\r\n";
+        let source =
+            "<template>\r\n<p/>\r\n</template>\r\n<script>\r\nconst a = 1\r\n</script>\r\n";
 
         let script = extracted(source);
 

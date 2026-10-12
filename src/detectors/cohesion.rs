@@ -48,8 +48,7 @@ pub(crate) fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
                 && (f.complexity as f64) > brain_cc
                 && (f.nesting as f64) > brain_nesting
         });
-        let is_brain_class =
-            (loc as f64) > loc_threshold && (methods.len() as f64) > fn_threshold;
+        let is_brain_class = (loc as f64) > loc_threshold && (methods.len() as f64) > fn_threshold;
         if is_brain_class && has_brain_method {
             let name = metrics::class_name(&class_node, ctx.source)
                 .unwrap_or_else(|| "<anonymous class>".to_string());
@@ -175,7 +174,10 @@ fn declared_names(declaration: &Node, ctx: &FileContext) -> Vec<String> {
     if let Some(name) = named(declaration) {
         return vec![name];
     }
-    metrics::all_nodes(declaration).iter().filter_map(named).collect()
+    metrics::all_nodes(declaration)
+        .iter()
+        .filter_map(named)
+        .collect()
 }
 
 /// Disjoint-set over method names, for counting connected components.
@@ -258,7 +260,10 @@ fn lcom4(
             }
         }
         // So does one calling the other.
-        for called in calls[f.name.as_str()].iter().filter(|n| names.contains(n.as_str())) {
+        for called in calls[f.name.as_str()]
+            .iter()
+            .filter(|n| names.contains(n.as_str()))
+        {
             components.union(&f.name, called);
         }
     }
@@ -320,4 +325,3 @@ pub(crate) fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         });
     }
 }
-

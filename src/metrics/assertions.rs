@@ -28,6 +28,7 @@ pub fn is_assertion(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     }
     let raw = text(&expression, source);
     let stripped = raw.strip_prefix("await ").unwrap_or(raw).trim_start();
-    spec.assertion_call_prefixes.iter().any(|prefix| stripped.starts_with(prefix))
+    spec.assertion_call_prefixes
+        .iter()
+        .any(|prefix| stripped.starts_with(prefix))
 }
-

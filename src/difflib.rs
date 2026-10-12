@@ -80,18 +80,30 @@ impl<'a> SequenceMatcher<'a> {
             if j >= b_range.end {
                 break;
             }
-            let earlier = if j == 0 { 0 } else { previous.get(&(j - 1)).copied().unwrap_or(0) };
+            let earlier = if j == 0 {
+                0
+            } else {
+                previous.get(&(j - 1)).copied().unwrap_or(0)
+            };
             let length = earlier + 1;
             row.insert(j, length);
             if length > best.size {
-                *best = Match { a_start: i + 1 - length, b_start: j + 1 - length, size: length };
+                *best = Match {
+                    a_start: i + 1 - length,
+                    b_start: j + 1 - length,
+                    size: length,
+                };
             }
         }
         row
     }
 
     fn find_longest_match(&self, window: Window) -> Match {
-        let mut best = Match { a_start: window.a.start, b_start: window.b.start, size: 0 };
+        let mut best = Match {
+            a_start: window.a.start,
+            b_start: window.b.start,
+            size: 0,
+        };
         let mut previous: HashMap<usize, usize> = HashMap::new();
         for i in window.a.clone() {
             previous = self.scan_row(i, &previous, &window.b, &mut best);
@@ -105,7 +117,11 @@ impl<'a> SequenceMatcher<'a> {
     // @aqs(disable:"Complex Conditional") the bounds check and the equality read better
     // together than behind a predicate name
     fn extend(&self, found: Match, window: Window) -> Match {
-        let Match { mut a_start, mut b_start, mut size } = found;
+        let Match {
+            mut a_start,
+            mut b_start,
+            mut size,
+        } = found;
         // Inline rather than behind `matches_before`/`matches_after` helpers: for a
         // two-line loop, seeing the bounds check and the equality together says more
         // than a predicate name does.
@@ -123,12 +139,19 @@ impl<'a> SequenceMatcher<'a> {
         {
             size += 1;
         }
-        Match { a_start, b_start, size }
+        Match {
+            a_start,
+            b_start,
+            size,
+        }
     }
 
     /// Total number of matched elements across all matching blocks.
     fn total_matches(&self) -> usize {
-        let mut queue = vec![Window { a: 0..self.a.len(), b: 0..self.b.len() }];
+        let mut queue = vec![Window {
+            a: 0..self.a.len(),
+            b: 0..self.b.len(),
+        }];
         let mut total = 0usize;
         while let Some(window) = queue.pop() {
             let found = self.find_longest_match(window.clone());
@@ -144,7 +167,10 @@ impl<'a> SequenceMatcher<'a> {
                 });
             }
             if a_end < window.a.end && b_end < window.b.end {
-                queue.push(Window { a: a_end..window.a.end, b: b_end..window.b.end });
+                queue.push(Window {
+                    a: a_end..window.a.end,
+                    b: b_end..window.b.end,
+                });
             }
         }
         total
@@ -190,16 +216,31 @@ mod tests {
         // Verified against CPython: SequenceMatcher(None, a, b).ratio()
         assert_eq!(ratio(&["a", "b", "c", "d"], &["a", "b", "x", "d"]), 0.75);
         assert_eq!(ratio(&["a", "b", "c"], &["a", "c"]), 0.8);
-        assert_eq!(ratio(&["q", "a", "b", "x", "c", "d"], &["a", "b", "y", "c", "d"]), 8.0 / 11.0);
+        assert_eq!(
+            ratio(&["q", "a", "b", "x", "c", "d"], &["a", "b", "y", "c", "d"]),
+            8.0 / 11.0
+        );
     }
 
     /// Two sequences sharing one very common element and differing elsewhere.
     fn autojunk_pair(n: usize) -> (Vec<String>, Vec<String>) {
         let a = (0..n)
-            .map(|i| if i % 3 != 0 { "common".to_string() } else { format!("u{i}") })
+            .map(|i| {
+                if i % 3 != 0 {
+                    "common".to_string()
+                } else {
+                    format!("u{i}")
+                }
+            })
             .collect();
         let b = (0..n)
-            .map(|i| if i % 3 != 0 { "common".to_string() } else { format!("v{i}") })
+            .map(|i| {
+                if i % 3 != 0 {
+                    "common".to_string()
+                } else {
+                    format!("v{i}")
+                }
+            })
             .collect();
         (a, b)
     }

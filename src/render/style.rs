@@ -3,7 +3,6 @@
 //! Colour is a property of the number, not of the writer, so `score_colour` is a free
 //! function. `Style` carries only whether the terminal wants ANSI and how wide it is.
 
-
 pub(crate) const HEALTHY: f64 = 8.0;
 
 pub(crate) const WARNING: f64 = 4.0;
@@ -139,4 +138,3 @@ pub(crate) fn print_title(title: &str, detail: &str, style: &Style) {
     println!("  {}{}", style.paint(title, BOLD), style.paint(detail, DIM));
     println!();
 }
-

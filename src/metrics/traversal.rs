@@ -21,14 +21,14 @@ pub const COMMENT_NODES: &[&str] = &["comment", "block_comment", "line_comment"]
 /// not heard of fails quietly: a Java `method_invocation` missing from it made every
 /// one-line method that calls something look like a getter.
 pub const CALL_NODES: &[&str] = &[
-    "call",                      // Python, Ruby, Go
-    "call_expression",           // TS / JS, Rust
-    "method_invocation",         // Java
+    "call",                       // Python, Ruby, Go
+    "call_expression",            // TS / JS, Rust
+    "method_invocation",          // Java
     "object_creation_expression", // Java, PHP
-    "function_call_expression",  // PHP
-    "member_call_expression",    // PHP
-    "scoped_call_expression",    // PHP
-    "macro_invocation",          // Rust
+    "function_call_expression",   // PHP
+    "member_call_expression",     // PHP
+    "scoped_call_expression",     // PHP
+    "macro_invocation",           // Rust
     "await_expression",
     "await",
 ];
@@ -39,12 +39,12 @@ pub(crate) fn is_call(node: &Node) -> bool {
 
 /// Node kinds that read a member off something, across every grammar here.
 pub const FIELD_ACCESS_NODES: &[&str] = &[
-    "attribute",               // Python
-    "member_expression",       // TS / JS
-    "field_expression",        // Rust
-    "selector_expression",     // Go
+    "attribute",                // Python
+    "member_expression",        // TS / JS
+    "field_expression",         // Rust
+    "selector_expression",      // Go
     "member_access_expression", // PHP
-    "member_call_expression",  // PHP
+    "member_call_expression",   // PHP
 ];
 
 /// What a language calls the object a method is running on.
@@ -134,4 +134,3 @@ pub fn all_nodes<'tree>(root: &Node<'tree>) -> Vec<Node<'tree>> {
     }
     out
 }
-

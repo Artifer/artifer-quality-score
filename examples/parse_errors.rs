@@ -25,7 +25,9 @@ fn main() {
         };
 
         let mut parser = Parser::new();
-        parser.set_language(&spec.language()).expect("grammar loads");
+        parser
+            .set_language(&spec.language())
+            .expect("grammar loads");
         let Some(tree) = parser.parse(&source, None) else {
             eprintln!("{path}: parser returned nothing");
             continue;
@@ -38,7 +40,11 @@ fn main() {
             let line = node.start_position().row + 1;
             let text = node.utf8_text(&source).unwrap_or("<binary>");
             let shown: String = text.chars().take(120).collect();
-            let label = if node.is_missing() { "MISSING" } else { "ERROR" };
+            let label = if node.is_missing() {
+                "MISSING"
+            } else {
+                "ERROR"
+            };
             println!("{path}:{line}: {label} {:?}", shown.trim());
         }
     }

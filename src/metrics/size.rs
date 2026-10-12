@@ -58,7 +58,8 @@ pub(crate) const LITERAL_NODES: &[&str] = &[
     "null",
 ];
 
-pub(crate) const IDENTIFIER_NODES: &[&str] = &["identifier", "property_identifier", "type_identifier"];
+pub(crate) const IDENTIFIER_NODES: &[&str] =
+    &["identifier", "property_identifier", "type_identifier"];
 
 /// Structure-only token sequence, for similarity comparison.
 ///
@@ -81,4 +82,3 @@ pub fn normalised_tokens(node: &Node, spec: &LanguageSpec, source: &[u8]) -> Vec
     }
     tokens
 }
-

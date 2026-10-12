@@ -35,7 +35,13 @@ impl ReportCache {
                 Ok(()) => Some(connection),
                 Err(_) => None,
             });
-        Self { connection, fingerprint, pending: Vec::new(), hits: 0, misses: 0 }
+        Self {
+            connection,
+            fingerprint,
+            pending: Vec::new(),
+            hits: 0,
+            misses: 0,
+        }
     }
 }
 
@@ -51,7 +57,9 @@ impl Cache for ReportCache {
     fn get(&mut self, key: &str) -> Option<FileReport> {
         let connection = self.connection.as_ref()?;
         let stored: Option<String> = connection
-            .query_row("SELECT report FROM reports WHERE key = ?1", [key], |row| row.get(0))
+            .query_row("SELECT report FROM reports WHERE key = ?1", [key], |row| {
+                row.get(0)
+            })
             .ok();
         let Some(stored) = stored else {
             self.misses += 1;

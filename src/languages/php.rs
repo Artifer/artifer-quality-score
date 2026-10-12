@@ -11,7 +11,9 @@ use tree_sitter::Node;
 fn is_static(node: &Node, _source: &[u8]) -> bool {
     let mut cursor = node.walk();
     let children: Vec<Node> = node.children(&mut cursor).collect();
-    children.iter().any(|child| child.kind() == "static_modifier")
+    children
+        .iter()
+        .any(|child| child.kind() == "static_modifier")
 }
 
 // @aqs(disable:"Large Method") a vocabulary table, not logic; splitting it would hide it
@@ -86,7 +88,9 @@ pub(super) fn spec() -> LanguageSpec {
         // $amount)`) and of a plain one declare the same thing.
         field_declaration_nodes: set(&["property_declaration", "property_promotion_parameter"]),
         instance_field_nodes: HashSet::new(),
-        primitive_types: set(&["int", "float", "string", "bool", "?int", "?float", "?string", "?bool"]),
+        primitive_types: set(&[
+            "int", "float", "string", "bool", "?int", "?float", "?string", "?bool",
+        ]),
         string_types: set(&["string", "?string"]),
         // A PHP parameter carries its type in a `type` field rather than in a wrapper
         // node, which `parameter_type` already falls back to.

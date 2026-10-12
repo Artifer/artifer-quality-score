@@ -37,8 +37,8 @@ pub use signatures::{
 };
 pub use size::{is_docstring, logical_lines, normalised_tokens};
 pub use traversal::{
-    all_nodes, is_kind, named_children, own_nodes, text, to_range, CALL_NODES, COMMENT_NODES, FIELD_ACCESS_NODES,
-    MARKUP_NODES, SELF_RECEIVERS,
+    all_nodes, is_kind, named_children, own_nodes, text, to_range, CALL_NODES, COMMENT_NODES,
+    FIELD_ACCESS_NODES, MARKUP_NODES, SELF_RECEIVERS,
 };
 
 // Helpers the submodules share with each other but callers never need. Re-exported so

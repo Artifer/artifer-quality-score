@@ -43,7 +43,10 @@ pub(crate) fn property_name(node: &Node, source: &[u8]) -> Option<String> {
     named_children(node)
         .into_iter()
         .find(|child| {
-            matches!(child.kind(), "property_identifier" | "private_property_identifier")
+            matches!(
+                child.kind(),
+                "property_identifier" | "private_property_identifier"
+            )
         })
         .map(|child| text(&child, source).to_string())
 }
@@ -106,4 +109,3 @@ pub(crate) fn collect_functions<'tree>(
         collect_functions(&child, spec, source, found);
     }
 }
-

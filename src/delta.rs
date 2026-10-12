@@ -28,7 +28,10 @@ use std::path::Path;
 fn finding_key(finding: &Finding) -> (String, String) {
     (
         finding.category.clone(),
-        finding.function.clone().unwrap_or_else(|| "<file>".to_string()),
+        finding
+            .function
+            .clone()
+            .unwrap_or_else(|| "<file>".to_string()),
     )
 }
 
@@ -45,10 +48,12 @@ pub fn compare_reports(
     old: Option<&FileReport>,
     new: Option<&FileReport>,
 ) -> (Vec<Finding>, Vec<Finding>, Vec<Finding>, Vec<Finding>) {
-    let old_findings: Vec<Finding> =
-        old.map(|r| r.all_findings().into_iter().cloned().collect()).unwrap_or_default();
-    let new_findings: Vec<Finding> =
-        new.map(|r| r.all_findings().into_iter().cloned().collect()).unwrap_or_default();
+    let old_findings: Vec<Finding> = old
+        .map(|r| r.all_findings().into_iter().cloned().collect())
+        .unwrap_or_default();
+    let new_findings: Vec<Finding> = new
+        .map(|r| r.all_findings().into_iter().cloned().collect())
+        .unwrap_or_default();
 
     let old_keys: Vec<(String, String)> = old_findings.iter().map(finding_key).collect();
     let new_keys: Vec<(String, String)> = new_findings.iter().map(finding_key).collect();
@@ -76,7 +81,12 @@ pub fn compare_reports(
         .map(|(_, finding)| finding.clone())
         .collect();
 
-    (ordered(introduced), ordered(fixed), ordered(degraded), ordered(improved))
+    (
+        ordered(introduced),
+        ordered(fixed),
+        ordered(degraded),
+        ordered(improved),
+    )
 }
 
 struct PairJob {
@@ -149,12 +159,16 @@ fn pair_jobs(
 
     // One batched git call per side, rather than two subprocesses per file. On a large
     // branch diff that dominates everything else.
-    let old_revisions: Vec<String> =
-        candidates.iter().map(|(path, _)| format!("{resolved}:{path}")).collect();
+    let old_revisions: Vec<String> = candidates
+        .iter()
+        .map(|(path, _)| format!("{resolved}:{path}"))
+        .collect();
     let old_blobs = read_blobs(repo, &old_revisions)?;
     let staged_blobs = if request.staged {
-        let revisions: Vec<String> =
-            candidates.iter().map(|(path, _)| format!(":{path}")).collect();
+        let revisions: Vec<String> = candidates
+            .iter()
+            .map(|(path, _)| format!(":{path}"))
+            .collect();
         read_blobs(repo, &revisions)?
     } else {
         Vec::new()
@@ -167,67 +181,83 @@ fn pair_jobs(
             staged_blobs.get(index).cloned().flatten()
         } else {
             let absolute = repo.join(path);
-            absolute.is_file().then(|| std::fs::read(&absolute).ok()).flatten()
+            absolute
+                .is_file()
+                .then(|| std::fs::read(&absolute).ok())
+                .flatten()
         };
         if old_source.is_none() && new_source.is_none() {
             continue;
         }
-        jobs.push(PairJob { path: path.clone(), language, old_source, new_source });
+        jobs.push(PairJob {
+            path: path.clone(),
+            language,
+            old_source,
+            new_source,
+        });
     }
     Ok(jobs)
 }
 
-/// Score every changed file twice — at the baseline, and as it stands now.
-pub fn compute_delta(request: DeltaRequest, _cache: &mut dyn Cache) -> Result<DeltaReport> {
-    let DeltaRequest { root, profile, baseline, staged, merge_base } = request;
-    let repo = repo_root(root)?;
-    let resolved = resolve_baseline(&repo, baseline, merge_base)?;
-    let targets = changed_files(&repo, &resolved, staged)?;
-    let jobs = pair_jobs(
-        &repo,
-        &resolved,
-        &DeltaRequest { root, profile, baseline, staged, merge_base },
-        targets,
-    )?;
-
-    let results: Vec<(FileDelta, Option<FileReport>, Option<FileReport>)> =
-        jobs.par_iter().map(|job| analyze_pair(job, profile)).collect();
-
-    let mut deltas: Vec<FileDelta> = Vec::with_capacity(results.len());
-    let mut old_reports: Vec<FileReport> = Vec::new();
-    let mut new_reports: Vec<FileReport> = Vec::new();
-    for (delta, old, new) in results {
-        deltas.push(delta);
-        if let Some(report) = old {
-            old_reports.push(report);
-        }
-        if let Some(report) = new {
-            new_reports.push(report);
-        }
-    }
-
-    let label = if merge_base {
-        format!("{baseline} (merge-base {})", &resolved[..8.min(resolved.len())])
+/// How the report names what it compared against.
+fn baseline_label(request: &DeltaRequest, resolved: &str) -> String {
+    let label = if request.merge_base {
+        format!(
+            "{} (merge-base {})",
+            request.baseline,
+            &resolved[..8.min(resolved.len())]
+        )
     } else {
-        resolved.clone()
+        resolved.to_string()
     };
-    let old_aggregate = aggregate_score(&old_reports);
-    let new_aggregate = aggregate_score(&new_reports);
+    if request.staged {
+        format!("{label} (staged)")
+    } else {
+        label
+    }
+}
 
+/// Worst regression first, then by path so equal changes keep a stable order.
+fn worst_first(deltas: &mut [FileDelta]) {
     deltas.sort_by(|a, b| {
         a.score_change
             .partial_cmp(&b.score_change)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.path.cmp(&b.path))
     });
+}
 
+/// Score every changed file twice — at the baseline, and as it stands now.
+pub fn compute_delta(request: DeltaRequest, _cache: &mut dyn Cache) -> Result<DeltaReport> {
+    let repo = repo_root(request.root)?;
+    let resolved = resolve_baseline(&repo, request.baseline, request.merge_base)?;
+    let targets = changed_files(&repo, &resolved, request.staged)?;
+    let jobs = pair_jobs(&repo, &resolved, &request, targets)?;
+
+    let results: Vec<(FileDelta, Option<FileReport>, Option<FileReport>)> = jobs
+        .par_iter()
+        .map(|job| analyze_pair(job, request.profile))
+        .collect();
+
+    let mut deltas: Vec<FileDelta> = Vec::with_capacity(results.len());
+    let mut old_reports: Vec<FileReport> = Vec::new();
+    let mut new_reports: Vec<FileReport> = Vec::new();
+    for (delta, old, new) in results {
+        deltas.push(delta);
+        old_reports.extend(old);
+        new_reports.extend(new);
+    }
+    worst_first(&mut deltas);
+
+    let old_score = aggregate_score(&old_reports);
+    let new_score = aggregate_score(&new_reports);
     Ok(DeltaReport {
         version: VERSION.to_string(),
-        profile: profile.name.clone(),
-        baseline: if staged { format!("{label} (staged)") } else { label },
-        old_score: old_aggregate,
-        new_score: new_aggregate,
-        score_change: round4(new_aggregate - old_aggregate),
+        profile: request.profile.name.clone(),
+        baseline: baseline_label(&request, &resolved),
+        old_score,
+        new_score,
+        score_change: round4(new_score - old_score),
         files: deltas,
     })
 }

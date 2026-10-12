@@ -78,8 +78,8 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
     ) -> Self {
         let mut functions = Vec::new();
         for node in metrics::iter_functions(&root, spec, source) {
-            let name = metrics::function_name(&node, source)
-                .unwrap_or_else(|| "<anonymous>".to_string());
+            let name =
+                metrics::function_name(&node, source).unwrap_or_else(|| "<anonymous>".to_string());
             let is_constructor = metrics::is_constructor(&node, &name, spec);
             functions.push(FunctionContext {
                 node,
@@ -98,8 +98,7 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
             Ok(directives) => (directives, None),
             Err(error) => (Vec::new(), Some(error.to_string())),
         };
-        let (file_directives, function_directives) =
-            resolve_directives(directives, &functions);
+        let (file_directives, function_directives) = resolve_directives(directives, &functions);
         Self {
             file_directives,
             function_directives,
@@ -162,7 +161,6 @@ pub(crate) fn percent(ratio: f64) -> String {
 // Function level
 // --------------------------------------------------------------------------- //
 
-
 /// Attach each directive to what it governs.
 ///
 /// A function-scoped directive applies to the next function that starts after it, which
@@ -207,11 +205,7 @@ impl FileContext<'_, '_> {
 }
 
 /// Collect `@aqs` directives from the file's comments.
-fn parse_directives(
-    root: &Node,
-    source: &[u8],
-    path: &str,
-) -> anyhow::Result<Vec<Directive>> {
+fn parse_directives(root: &Node, source: &[u8], path: &str) -> anyhow::Result<Vec<Directive>> {
     let comments: Vec<(String, usize)> = metrics::all_nodes(root)
         .iter()
         .filter(|node| metrics::COMMENT_NODES.contains(&node.kind()))

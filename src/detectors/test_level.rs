@@ -67,7 +67,10 @@ pub(crate) fn large_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFinding
 pub(crate) fn group_assertion_runs<'tree>(
     ctx: &FileContext<'tree, '_>,
     min_statements: usize,
-) -> (Vec<Vec<&'static str>>, HashMap<Vec<&'static str>, Vec<Node<'tree>>>) {
+) -> (
+    Vec<Vec<&'static str>>,
+    HashMap<Vec<&'static str>, Vec<Node<'tree>>>,
+) {
     let mut order: Vec<Vec<&'static str>> = Vec::new();
     let mut groups: HashMap<Vec<&'static str>, Vec<Node<'tree>>> = HashMap::new();
     for run in assertion_runs(ctx) {
@@ -113,4 +116,3 @@ pub(crate) fn duplicated_assertion_blocks(ctx: &FileContext, out: &mut Vec<RawFi
         }
     }
 }
-
