@@ -74,7 +74,6 @@ pub(super) fn spec() -> LanguageSpec {
         // proves nothing about whether the method holds instance state.
         implicit_params: HashSet::new(),
         implicit_param_nodes: HashSet::new(),
-        receiver_field: None,
         // `def self.parse` is a namespace function, not a method with an instance.
         namespace_function: Some(|node, _| node.kind() == "singleton_method"),
         explicit_receiver: false,

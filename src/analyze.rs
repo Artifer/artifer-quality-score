@@ -94,11 +94,7 @@ fn count_syntax_errors(root: &Node) -> usize {
 /// `&amp;&amp;` would destroy real logical operators — silently lowering complexity and
 /// inflating the score.
 fn is_operator_ampersand(source: &[u8], index: usize) -> bool {
-    let previous = if index > 0 {
-        source.get(index - 1)
-    } else {
-        None
-    };
+    let previous = index.checked_sub(1).and_then(|before| source.get(before));
     let next = source.get(index + 1);
     next == Some(&b'&') || previous == Some(&b'&') || next == Some(&b'=')
 }
@@ -166,13 +162,9 @@ pub fn analyze_source(
     parser
         .set_language(&spec.language())
         .expect("pinned grammar is compatible");
-    let Some(tree) = parser.parse(source, None) else {
-        return FileReport::unsupported(
-            path.to_string(),
-            spec.name.to_string(),
-            "could not parse".to_string(),
-        );
-    };
+    // `parse` only declines when it is cancelled, times out or has no language, and
+    // none of those is set up here: broken source still comes back as a tree.
+    let tree = parser.parse(source, None).expect("an uncancelled parse");
 
     let mut errors = count_syntax_errors(&tree.root_node());
     let mut owned_source: Option<Vec<u8>> = None;
@@ -190,9 +182,7 @@ pub fn analyze_source(
         let Some(repaired) = repair_jsx_ampersands(current, &active.root_node()) else {
             break;
         };
-        let Some(retry) = parser.parse(&repaired, None) else {
-            break;
-        };
+        let retry = parser.parse(&repaired, None).expect("an uncancelled parse");
         let retry_errors = count_syntax_errors(&retry.root_node());
         if retry_errors >= errors {
             break;
@@ -282,19 +272,12 @@ pub fn analyze_jobs(
     slots.into_iter().flatten().collect()
 }
 
-fn display_path(path: &Path, relative_to: Option<&Path>) -> String {
-    let normalise = |p: &Path| p.to_string_lossy().replace('\\', "/");
-    match relative_to {
-        None => normalise(path),
-        Some(base) => {
-            let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-            match resolved.strip_prefix(&base) {
-                Ok(relative) => normalise(relative),
-                Err(_) => normalise(path),
-            }
-        }
-    }
+/// `path` as the report shows it: relative to `base` when it lies beneath it.
+fn display_path(path: &Path, base: &Path) -> String {
+    let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let base = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    // A second target outside the first one's directory has no relative form.
+    as_posix(resolved.strip_prefix(&base).unwrap_or(path))
 }
 
 fn as_posix(path: &Path) -> String {
@@ -319,20 +302,10 @@ fn is_scannable(path: &Path, profile: &Profile) -> bool {
 /// checkout of the same repository is a fact that can be read instead of guessed — the
 /// same reasoning as `detect_shadcn_ui` reading `components.json`.
 fn is_linked_worktree(directory: &Path) -> bool {
-    let marker = directory.join(".git");
-    if !marker.is_file() {
-        return false;
-    }
-    let Ok(contents) = std::fs::read_to_string(&marker) else {
-        return false;
-    };
-    let Some(gitdir) = contents
-        .lines()
-        .next()
-        .and_then(|l| l.strip_prefix("gitdir:"))
-    else {
-        return false;
-    };
+    // A `.git` directory, or none at all, reads as nothing — and so as "not a worktree".
+    let contents = std::fs::read_to_string(directory.join(".git")).unwrap_or_default();
+    let first_line = contents.lines().next().unwrap_or_default();
+    let gitdir = first_line.strip_prefix("gitdir:").unwrap_or_default();
     gitdir.replace('\\', "/").contains("/worktrees/")
 }
 
@@ -389,7 +362,7 @@ pub fn discover(roots: &[PathBuf], profile: &Profile) -> Vec<PathBuf> {
 pub fn scan(
     roots: &[PathBuf],
     profile: &Profile,
-    relative_to: Option<&Path>,
+    relative_to: &Path,
     cache: &mut dyn Cache,
 ) -> ScanReport {
     let paths = discover(roots, profile);
@@ -427,5 +400,19 @@ pub fn scan(
         // re-analysed and nothing here can feed back into a file's score.
         observations: clones::cross_file_duplication(&reports),
         files: reports,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_that_cannot_be_resolved_is_still_shown_relative_to_its_base() {
+        // Nothing here exists, so neither side can be canonicalised.
+        let shown = display_path(Path::new("no/such/dir/a.py"), Path::new("no/such"));
+        assert_eq!(shown, "dir/a.py");
+        let outside = display_path(Path::new("elsewhere/a.py"), Path::new("no/such"));
+        assert_eq!(outside, "elsewhere/a.py");
     }
 }

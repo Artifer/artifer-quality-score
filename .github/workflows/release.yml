@@ -58,14 +58,17 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin/cargo-llvm-cov
             target
-          key: ci-${{ hashFiles('Cargo.lock') }}
+          key: ci-${{ hashFiles('Cargo.lock', 'Makefile') }}
 
       # `v0.8.0` was published while CI was red on the very same tag: the two workflows
       # ran side by side and this one never asked. A release is now built only from a
       # commit that passes the checks.
       - name: make check
-        run: make check
+        run: |
+          make tools
+          make check
 
   build:
     name: Build ${{ matrix.label }}

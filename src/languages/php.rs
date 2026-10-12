@@ -80,7 +80,6 @@ pub(super) fn spec() -> LanguageSpec {
         // makes a field read and a method call the same shape here as in Python.
         implicit_params: HashSet::new(),
         implicit_param_nodes: HashSet::new(),
-        receiver_field: None,
         namespace_function: Some(is_static),
         explicit_receiver: false,
         implicit_self_calls: false,

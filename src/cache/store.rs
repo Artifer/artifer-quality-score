@@ -8,8 +8,6 @@ pub trait Cache {
     fn get(&mut self, key: &str) -> Option<FileReport>;
     fn put(&mut self, key: &str, report: &FileReport);
     fn commit(&mut self);
-    fn hits(&self) -> usize;
-    fn misses(&self) -> usize;
 }
 
 /// Stand-in used when caching is switched off, so callers need no branches.
@@ -28,10 +26,4 @@ impl Cache for NullCache {
     }
     fn put(&mut self, _key: &str, _report: &FileReport) {}
     fn commit(&mut self) {}
-    fn hits(&self) -> usize {
-        0
-    }
-    fn misses(&self) -> usize {
-        0
-    }
 }

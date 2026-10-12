@@ -30,10 +30,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin/cargo-llvm-cov
             target
-          key: ci-${{ hashFiles('Cargo.lock') }}
+          key: ci-${{ hashFiles('Cargo.lock', 'Makefile') }}
 
       # The checks are defined in the Makefile, not here: lock file in sync, rustfmt,
-      # clippy, the tool's score of its own source (must be 10), and the tests.
+      # clippy, the tool's score of its own source (must be 10), and the tests at 100%
+      # line and function coverage.
       - name: make check
-        run: make check
+        run: |
+          make tools
+          make check

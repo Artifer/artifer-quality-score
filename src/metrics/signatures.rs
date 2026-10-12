@@ -74,16 +74,11 @@ pub fn parameters<'tree>(
 /// `@staticmethod` or a Rust associated function holds no instance state, so it is not
 /// an instance method and LCOM4 must not count it as a responsibility of its own.
 pub fn has_receiver(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    // Go declares the receiver outside the parameter list entirely.
-    if let Some(field) = spec.receiver_field {
-        return node.child_by_field_name(field).is_some();
-    }
-    let Some(container) = param_container(node, spec) else {
-        return false;
-    };
-    named_children(&container).iter().any(|param| {
-        spec.implicit_param_nodes.contains(param.kind())
-            || spec.implicit_params.contains(text(param, source).trim())
+    param_container(node, spec).is_some_and(|container| {
+        named_children(&container).iter().any(|param| {
+            spec.implicit_param_nodes.contains(param.kind())
+                || spec.implicit_params.contains(text(param, source).trim())
+        })
     })
 }
 
@@ -96,10 +91,6 @@ pub fn parameter_type(param: &Node, spec: &LanguageSpec, source: &[u8]) -> Optio
                     .trim()
                     .to_string(),
             );
-        }
-        // Python's typed_parameter nests the annotation under a `type` node.
-        if current.kind() == "type" {
-            return Some(text(&current, source).trim().to_string());
         }
     }
     param.child_by_field_name("type").map(|annotation| {
@@ -119,11 +110,8 @@ pub(crate) fn bare_type(type_name: &str) -> &str {
 }
 
 pub fn is_primitive_type(type_name: Option<&str>, spec: &LanguageSpec) -> bool {
-    match type_name {
-        None => false,
-        Some("") => false,
-        Some(name) => spec.primitive_types.contains(bare_type(name)),
-    }
+    // An empty annotation is in no set of types, so it needs no case of its own.
+    type_name.is_some_and(|name| spec.primitive_types.contains(bare_type(name)))
 }
 
 /// Whether a function is a constructor, by node kind, exact name, or convention.

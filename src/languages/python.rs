@@ -39,7 +39,6 @@ pub(super) fn spec() -> LanguageSpec {
         continuation_fields: &[],
         param_containers: set(&["parameters", "lambda_parameters"]),
         param_field: None,
-        receiver_field: None,
         implicit_params: set(&["self", "cls", "mcs", "metacls"]),
         implicit_param_nodes: HashSet::new(),
         explicit_receiver: true,

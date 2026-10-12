@@ -96,3 +96,51 @@ pub(crate) fn file_findings(report: &FileReport) -> Vec<&Finding> {
     });
     findings
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Range;
+
+    fn finding(line: usize, penalty: f64) -> Finding {
+        Finding {
+            category: "Complex Method".into(),
+            details: "cc = 14".into(),
+            highlight_range: Range::line(line),
+            penalty,
+            value: None,
+            threshold: None,
+            function: Some("f".into()),
+        }
+    }
+
+    #[test]
+    fn a_narrow_terminal_drops_the_function_column_first() {
+        let narrow = Layout::for_width(60);
+        assert!(!narrow.show_function);
+        assert_eq!(narrow.function, 0);
+        assert!(Layout::for_width(120).show_function);
+
+        // The line number and the penalty survive at any width.
+        let line = finding_line(&finding(7, 0.5), &narrow, &Style::new(false, 60));
+        assert!(line.starts_with("      7  "), "{line:?}");
+        assert!(line.ends_with(" -0.50"), "{line:?}");
+    }
+
+    #[test]
+    fn a_finding_past_the_rule_cap_says_so() {
+        let style = Style::new(false, 100);
+        assert_eq!(penalty_text(&finding(1, 0.0), &style), "capped");
+    }
+
+    #[test]
+    fn equal_penalties_are_listed_in_line_order() {
+        let mut report = FileReport::unsupported("f.py".into(), "python".into(), "x".into());
+        report.file_level_code_smells = vec![finding(9, 0.5), finding(3, 0.5), finding(5, 0.8)];
+        let lines: Vec<usize> = file_findings(&report)
+            .iter()
+            .map(|f| f.highlight_range.start_line)
+            .collect();
+        assert_eq!(lines, vec![5, 3, 9]);
+    }
+}

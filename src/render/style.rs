@@ -138,3 +138,57 @@ pub(crate) fn print_title(title: &str, detail: &str, style: &Style) {
     println!("  {}{}", style.paint(title, BOLD), style.paint(detail, DIM));
     println!();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const COLOURED: Style = Style {
+        colour: true,
+        width: 100,
+    };
+
+    #[test]
+    fn a_score_is_coloured_by_its_band() {
+        assert_eq!(score_colour(HEALTHY), GREEN);
+        assert_eq!(score_colour(WARNING), YELLOW);
+        assert_eq!(score_colour(WARNING - 0.01), RED);
+    }
+
+    #[test]
+    fn colour_is_only_written_when_the_terminal_wants_it() {
+        assert_eq!(COLOURED.paint("x", CYAN), format!("{CYAN}x{RESET}"));
+        assert_eq!(Style::new(false, 100).paint("x", CYAN), "x");
+        assert_eq!(Style::new(false, 100).score(9.5, 5), " 9.50");
+        assert_eq!(COLOURED.score(9.5, 5), format!("{BOLD}{GREEN} 9.50{RESET}"));
+    }
+
+    #[test]
+    fn a_change_shows_its_direction() {
+        assert_eq!(COLOURED.change(0.25), format!("{BOLD}{GREEN}+0.25{RESET}"));
+        assert_eq!(COLOURED.change(-0.25), format!("{BOLD}{RED}-0.25{RESET}"));
+        assert_eq!(COLOURED.change(0.0), format!("{DIM}  0.00{RESET}"));
+    }
+
+    #[test]
+    fn fit_pads_or_ellipsises_to_the_exact_width() {
+        assert_eq!(fit("ab", 4), "ab  ");
+        assert_eq!(fit("abcdef", 4), "abc…");
+        assert_eq!(fit("abcdef", 1), "…");
+        assert_eq!(fit("abcdef", 0), "");
+    }
+
+    #[test]
+    fn numbers_drop_a_meaningless_fraction() {
+        assert_eq!(number(15.0), "15");
+        assert_eq!(number(0.85), "0.85");
+        assert_eq!(thousands(999), "999");
+        assert_eq!(thousands(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn wrap_breaks_on_words_and_always_returns_a_line() {
+        assert_eq!(wrap("one two three", 7), vec!["one two", "three"]);
+        assert_eq!(wrap("", 7), vec![""]);
+    }
+}

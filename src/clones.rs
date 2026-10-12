@@ -60,10 +60,13 @@ pub fn fingerprints(ctx: &FileContext) -> Vec<CloneFingerprint> {
 
     let mut found = Vec::new();
     for (index, function) in ctx.functions.iter().enumerate() {
-        if (function.loc as f64) < min_loc {
-            continue;
-        }
-        let tokens = metrics::normalised_tokens(&function.node, ctx.spec, ctx.source);
+        // Too small to be news, or nothing to compare: every empty token sequence would
+        // hash alike.
+        let tokens = if (function.loc as f64) >= min_loc {
+            metrics::normalised_tokens(&function.node, ctx.spec, ctx.source)
+        } else {
+            Vec::new()
+        };
         if tokens.is_empty() {
             continue;
         }

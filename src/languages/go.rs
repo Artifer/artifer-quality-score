@@ -17,12 +17,12 @@ fn is_go_error_guard(node: &Node, source: &[u8]) -> bool {
     if node.kind() != "if_statement" || node.child_by_field_name("alternative").is_some() {
         return false;
     }
-    let Some(condition) = node.child_by_field_name("condition") else {
+    let comparison = node
+        .child_by_field_name("condition")
+        .filter(|condition| condition.kind() == "binary_expression");
+    let Some(condition) = comparison else {
         return false;
     };
-    if condition.kind() != "binary_expression" {
-        return false;
-    }
     let field = |name: &str| {
         condition
             .child_by_field_name(name)
@@ -97,10 +97,10 @@ pub(super) fn spec() -> LanguageSpec {
         param_containers: set(&["parameter_list"]),
         param_field: Some("parameters"),
         // A receiver is named by the author (`m`, `s`, `srv`), so there is no list of
-        // names to recognise it by -- only the field it sits in.
+        // names to recognise it by -- only the field it sits in, which `param_field`
+        // already steps past. Go has no class nodes, so nothing asks about receivers.
         implicit_params: HashSet::new(),
         implicit_param_nodes: HashSet::new(),
-        receiver_field: Some("receiver"),
         explicit_receiver: true,
         implicit_self_calls: false,
         namespace_function: None,

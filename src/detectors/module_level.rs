@@ -17,15 +17,13 @@ pub(crate) fn code_duplication(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         .iter()
         .filter(|f| (f.loc as f64) >= min_loc)
         .map(|f| (f, metrics::normalised_tokens(&f.node, ctx.spec, ctx.source)))
+        .filter(|(_, tokens)| !tokens.is_empty())
         .collect();
 
     let mut reported: HashSet<String> = HashSet::new();
     for index in 0..candidates.len() {
         let (function, tokens) = &candidates[index];
         for (other, other_tokens) in candidates.iter().skip(index + 1) {
-            if tokens.is_empty() || other_tokens.is_empty() {
-                continue;
-            }
             let (shorter, longer) = if tokens.len() <= other_tokens.len() {
                 (tokens.len(), other_tokens.len())
             } else {

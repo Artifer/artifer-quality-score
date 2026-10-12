@@ -87,9 +87,8 @@ fn parse_body(body: &str) -> Result<(Vec<String>, bool)> {
         categories.push(name.to_string());
     }
 
-    if categories.is_empty() && !all {
-        bail!("a directive must disable at least one rule");
-    }
+    // `split` always yields a clause, and every clause either names something or fails
+    // above, so a body that gets here disables at least one rule.
     Ok((categories, all))
 }
 

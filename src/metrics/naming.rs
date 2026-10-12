@@ -32,23 +32,9 @@ pub fn function_name(node: &Node, source: &[u8]) -> Option<String> {
         return Some(text(&named, source).to_string());
     }
 
-    property_name(node, source).or_else(|| binding_name(node, source))
-}
-
-/// `constructor(...)`, `get foo()` and friends carry a property_identifier.
-pub(crate) fn property_name(node: &Node, source: &[u8]) -> Option<String> {
-    if node.kind() != "method_definition" {
-        return None;
-    }
-    named_children(node)
-        .into_iter()
-        .find(|child| {
-            matches!(
-                child.kind(),
-                "property_identifier" | "private_property_identifier"
-            )
-        })
-        .map(|child| text(&child, source).to_string())
+    // `constructor(...)`, `get foo()` and friends need no case of their own: the pinned
+    // grammars give a method_definition its property identifier as the `name` field.
+    binding_name(node, source)
 }
 
 /// `const load = async () => {}` and `let f = |x| ..` are named units even though the

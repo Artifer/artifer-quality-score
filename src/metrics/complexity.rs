@@ -7,14 +7,12 @@ use tree_sitter::Node;
 use super::*;
 
 pub(crate) fn is_boolean_operator(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    if !is_kind(node, &spec.boolean_op_nodes) {
-        return false;
-    }
-    match node.child_by_field_name("operator") {
-        // Python models `and`/`or` as distinct node types already.
-        None => true,
-        Some(operator) => spec.boolean_operators.contains(text(&operator, source)),
-    }
+    // Every pinned grammar names the operator in a field, Python's `boolean_operator`
+    // included, so one lookup serves them all.
+    is_kind(node, &spec.boolean_op_nodes)
+        && node
+            .child_by_field_name("operator")
+            .is_some_and(|operator| spec.boolean_operators.contains(text(&operator, source)))
 }
 
 /// McCabe complexity: one, plus one per decision point.
@@ -41,16 +39,13 @@ pub fn cyclomatic_complexity(node: &Node, spec: &LanguageSpec, source: &[u8]) ->
 /// `elif_clause`, TS's `else_clause`), and a bare `if` hanging off a field of the outer
 /// one, which is how Go writes it.
 pub(crate) fn continues_branch(node: &Node, spec: &LanguageSpec) -> bool {
-    let Some(parent) = node.parent() else {
-        return false;
-    };
-    if is_kind(&parent, &spec.continuation_nodes) {
-        return true;
-    }
-    spec.continuation_fields.iter().any(|field| {
-        parent
-            .child_by_field_name(field)
-            .is_some_and(|child| child.id() == node.id())
+    node.parent().is_some_and(|parent| {
+        is_kind(&parent, &spec.continuation_nodes)
+            || spec.continuation_fields.iter().any(|field| {
+                parent
+                    .child_by_field_name(field)
+                    .is_some_and(|child| child.id() == node.id())
+            })
     })
 }
 

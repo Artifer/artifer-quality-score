@@ -269,3 +269,178 @@ fn apply_pattern_lists(profile: &mut Profile, object: &serde_json::Map<String, s
         profile.test_exempt_rules = PatternSet::new(rules);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Load a config with this body, from a file of its own.
+    fn load(name: &str, body: &str) -> Result<Profile> {
+        let root = std::env::temp_dir().join(format!("aqs-config-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+        let path = root.join("custom.json");
+        std::fs::write(&path, body).expect("write");
+        let loaded = load_profile(&root, Some(&path));
+        let _ = std::fs::remove_dir_all(&root);
+        loaded
+    }
+
+    /// Each case is a config name, its body, and a phrase the refusal has to contain.
+    fn assert_refused(cases: &[(&str, &str, &str)]) {
+        for (name, body, expected) in cases {
+            let message = refusal(name, body);
+            assert!(message.contains(expected), "{body}: {message}");
+        }
+    }
+
+    fn refusal(name: &str, body: &str) -> String {
+        load(name, body)
+            .expect_err("the config should be refused")
+            .to_string()
+    }
+
+    #[test]
+    fn an_upward_search_starts_from_a_directory() {
+        // An empty path has no parent, and a file searches from where it lives.
+        assert_eq!(ancestors(Path::new(""))[0], PathBuf::from("."));
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert_eq!(ancestors(&file)[0], Path::new(env!("CARGO_MANIFEST_DIR")));
+    }
+
+    #[test]
+    fn an_alias_that_names_no_directory_declares_nothing() {
+        let root = std::env::temp_dir().join("aqs-config-empty-alias");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        std::fs::write(root.join("components.json"), r#"{"aliases":{"ui":"@/"}}"#).expect("write");
+        assert_eq!(detect_shadcn_ui(&root), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn thresholds_are_overridden_by_name() {
+        let body = r#"{"thresholds": {"function_cyclomatic_complexity_warning": 20}}"#;
+        let profile = load("threshold", body).expect("loads");
+        assert_eq!(
+            profile.threshold("function_cyclomatic_complexity_warning"),
+            20.0
+        );
+    }
+
+    #[test]
+    fn a_rule_takes_a_bare_weight_or_named_fields() {
+        let body = r#"{"rules": {
+            "Complex Method": 0.5,
+            "Large Method": {"base": 1, "scale": 2, "cap": 3, "file_cap": 4, "weight": 5}
+        }}"#;
+        let profile = load("rule", body).expect("loads");
+        assert_eq!(profile.rule("Complex Method").weight, 0.5);
+        let large = profile.rule("Large Method");
+        assert_eq!(
+            (
+                large.base,
+                large.scale,
+                large.cap,
+                large.file_cap,
+                large.weight
+            ),
+            (1.0, 2.0, 3.0, 4.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_read_is_refused_by_name() {
+        let missing = Path::new("/no/such/aqs-config.json");
+        let message = load_profile(Path::new("."), Some(missing))
+            .expect_err("nothing to read")
+            .to_string();
+        assert!(
+            message.contains("/no/such/aqs-config.json: cannot read config"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_config_that_cannot_mean_what_it_says_is_refused() {
+        assert_refused(&[
+            // a malformed threshold is refused
+            (
+                "t-shape",
+                r#"{"thresholds": []}"#,
+                "thresholds must be an object",
+            ),
+            (
+                "t-name",
+                r#"{"thresholds": {"nope": 1}}"#,
+                "unknown threshold",
+            ),
+            (
+                "t-value",
+                r#"{"thresholds": {"function_cyclomatic_complexity_warning": "high"}}"#,
+                "must be a number",
+            ),
+            // a malformed rule is refused
+            ("r-shape", r#"{"rules": []}"#, "rules must be an object"),
+            (
+                "r-value",
+                r#"{"rules": {"Complex Method": "off"}}"#,
+                "must be a number or an object",
+            ),
+            (
+                "r-field-value",
+                r#"{"rules": {"Complex Method": {"cap": "low"}}}"#,
+                "field \"cap\" must be a number",
+            ),
+            (
+                "r-field-name",
+                r#"{"rules": {"Complex Method": {"ceiling": 1}}}"#,
+                "unknown field(s): ceiling",
+            ),
+            // a name that is not ours is refused
+            (
+                "unknown-rule",
+                r#"{"rules": {"Complex Methd": 1}}"#,
+                "unknown rule",
+            ),
+            (
+                "unknown-section",
+                r#"{"exclude_pattern": []}"#,
+                "unknown config section",
+            ),
+            (
+                "worktrees",
+                r#"{"scan_worktrees": "yes"}"#,
+                "scan_worktrees must be",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn the_scalar_settings_are_applied() {
+        let body = r#"{"name": "strict", "scan_worktrees": true, "_note": "a comment"}"#;
+        let profile = load("settings", body).expect("loads");
+        assert_eq!(profile.name, "strict");
+        assert!(profile.scan_worktrees);
+    }
+
+    #[test]
+    fn the_top_level_must_be_an_object() {
+        let message = refusal("top-level", "[]");
+        assert!(message.contains("expected a JSON object"), "{message}");
+    }
+
+    #[test]
+    fn a_pattern_list_replaces_its_defaults() {
+        let body = r#"{
+            "test_patterns": ["checks/*"],
+            "exclude_patterns": ["gen/*"],
+            "test_exempt_rules": ["Large Method"]
+        }"#;
+        let profile = load("patterns", body).expect("loads");
+        assert!(profile.test_patterns.matches("checks/a.py"));
+        assert!(!profile.test_patterns.matches("tests/test_a.py"));
+        assert!(profile.exclude_patterns.matches("gen/a.py"));
+        assert!(!profile.exclude_patterns.matches("node_modules/a.js"));
+        assert!(profile.test_exempt_rules.contains("Large Method"));
+    }
+}

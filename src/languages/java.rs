@@ -85,7 +85,6 @@ pub(super) fn spec() -> LanguageSpec {
         // `this` is implicit: a method never names its receiver.
         implicit_params: HashSet::new(),
         implicit_param_nodes: HashSet::new(),
-        receiver_field: None,
         namespace_function: Some(is_static),
         explicit_receiver: false,
         implicit_self_calls: true,

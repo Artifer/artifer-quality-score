@@ -40,7 +40,6 @@ pub(super) fn spec() -> LanguageSpec {
         continuation_fields: &[],
         param_containers: set(&["parameters", "closure_parameters"]),
         param_field: None,
-        receiver_field: None,
         implicit_params: set(&["self", "&self", "&mut self", "mut self"]),
         implicit_param_nodes: set(&["self_parameter"]),
         explicit_receiver: true,

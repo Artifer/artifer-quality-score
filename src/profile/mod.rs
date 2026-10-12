@@ -95,6 +95,19 @@ mod tests {
     }
 
     #[test]
+    fn a_rule_without_a_scale_charges_its_base_and_no_more() {
+        let flat = RuleConfig {
+            base: 0.4,
+            scale: 0.0,
+            cap: 5.0,
+            file_cap: 9.0,
+            weight: 1.0,
+        };
+        assert_eq!(flat.penalty(11.0, 10.0), 0.4);
+        assert_eq!(flat.penalty(500.0, 10.0), 0.4);
+    }
+
+    #[test]
     fn zero_weight_is_free() {
         let config = RuleConfig {
             base: 1.0,

@@ -46,11 +46,9 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
         start.parent().unwrap_or(start).to_path_buf()
     };
     let output = git(&directory, &["rev-parse", "--show-toplevel"])?;
-    let trimmed = output.trim();
-    if trimmed.is_empty() {
-        bail!("{} is not inside a git repository", directory.display());
-    }
-    Ok(PathBuf::from(trimmed))
+    let problem = format!("{} is not inside a git repository", directory.display());
+    let root = answer(&output, problem)?;
+    Ok(PathBuf::from(root))
 }
 
 /// The commit to compare against.
@@ -66,18 +64,25 @@ pub fn resolve_baseline(repo: &Path, reference: &str, use_merge_base: bool) -> R
             repo,
             &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
         )?;
-        let trimmed = resolved.trim().to_string();
-        if trimmed.is_empty() {
-            bail!("cannot resolve {reference}");
-        }
-        return Ok(trimmed);
+        return answer(&resolved, format!("cannot resolve {reference}"));
     }
     let merge_base = git(repo, &["merge-base", "HEAD", reference])?;
-    let trimmed = merge_base.trim().to_string();
+    answer(
+        &merge_base,
+        format!("no common ancestor between HEAD and {reference}"),
+    )
+}
+
+/// What git printed, trimmed — or `problem` when it printed nothing.
+///
+/// git reports most failures through its exit status, which [`git`] already turns into an
+/// error. This is for the commands that can succeed and still have no answer.
+fn answer(output: &str, problem: String) -> Result<String> {
+    let trimmed = output.trim();
     if trimmed.is_empty() {
-        bail!("no common ancestor between HEAD and {reference}");
+        bail!(problem);
     }
-    Ok(trimmed)
+    Ok(trimmed.to_string())
 }
 
 /// Repo-relative paths that differ from the baseline.
@@ -151,27 +156,26 @@ pub fn read_blobs(repo: &Path, revisions: &[String]) -> Result<Vec<Option<Vec<u8
     let mut offset = 0usize;
 
     for _ in revisions {
-        let Some(newline) = stream[offset..].iter().position(|&b| b == b'\n') else {
-            blobs.push(None);
-            continue;
-        };
-        let header = String::from_utf8_lossy(&stream[offset..offset + newline]).to_string();
-        offset += newline + 1;
-
-        // "<oid> missing" / "<oid> ambiguous" carry no payload.
-        let size = header
-            .rsplit(' ')
-            .next()
-            .and_then(|token| token.parse::<usize>().ok());
-        let Some(size) = size else {
-            blobs.push(None);
-            continue;
-        };
-        let end = (offset + size).min(stream.len());
-        blobs.push(Some(stream[offset..end].to_vec()));
-        offset = end + 1; // payload is followed by a trailing newline
+        let blob = payload_size(&stream, &mut offset).map(|size| {
+            let end = (offset + size).min(stream.len());
+            let payload = stream[offset..end].to_vec();
+            offset = end + 1; // payload is followed by a trailing newline
+            payload
+        });
+        blobs.push(blob);
     }
     Ok(blobs)
+}
+
+/// Read one `cat-file --batch` header at `offset` and step past it.
+///
+/// None when there is no payload to read: "<oid> missing" and "<oid> ambiguous" carry
+/// none, and neither does a stream that ended early.
+fn payload_size(stream: &[u8], offset: &mut usize) -> Option<usize> {
+    let newline = stream[*offset..].iter().position(|&b| b == b'\n')?;
+    let header = String::from_utf8_lossy(&stream[*offset..*offset + newline]).to_string();
+    *offset += newline + 1;
+    header.rsplit(' ').next()?.parse::<usize>().ok()
 }
 
 /// Supported, non-excluded paths in a revision's tree, sorted.
@@ -229,4 +233,27 @@ pub fn scan_revision(
         observations: crate::clones::cross_file_duplication(&reports),
         files: reports,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_command_that_succeeds_with_no_output_has_no_answer() {
+        assert_eq!(answer(" abc123\n", "unused".into()).unwrap(), "abc123");
+        let error = answer("\n", "cannot resolve main".into()).unwrap_err();
+        assert_eq!(error.to_string(), "cannot resolve main");
+    }
+
+    #[test]
+    fn a_header_without_a_size_has_no_payload() {
+        let stream = b"abc blob 5\nhello\ndef missing\n";
+        let mut offset = 0;
+        assert_eq!(payload_size(stream, &mut offset), Some(5));
+        offset += 5 + 1;
+        assert_eq!(payload_size(stream, &mut offset), None);
+        assert_eq!(offset, stream.len(), "the header is still consumed");
+        assert_eq!(payload_size(stream, &mut offset), None, "nothing left");
+    }
 }

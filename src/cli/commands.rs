@@ -25,7 +25,7 @@ fn load(root: &Path, explicit: Option<&Path>) -> Result<Profile, ExitCode> {
 
 pub(super) fn resolve_targets(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, ExitCode> {
     let targets = if paths.is_empty() {
-        vec![std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))]
+        vec![current_dir()]
     } else {
         paths
     };
@@ -89,7 +89,7 @@ pub fn run_scan(args: ScanArgs) -> Result<ExitCode, ExitCode> {
         profile: loaded,
     } = prepare(args.paths, &args.profile, args.include_worktrees)?;
     let mut cache = open_cache(Some(&base), &loaded, !args.no_cache);
-    let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
+    let report = analyze::scan(&targets, &loaded, &base, cache.as_mut());
 
     if args.json {
         let mut value = report_as_json(&report);
@@ -191,7 +191,7 @@ pub fn run_check(args: CheckArgs) -> Result<ExitCode, ExitCode> {
         profile: loaded,
     } = prepare(args.paths, &args.profile, args.include_worktrees)?;
     let mut cache = open_cache(None, &loaded, false);
-    let report = analyze::scan(&targets, &loaded, Some(&base), cache.as_mut());
+    let report = analyze::scan(&targets, &loaded, &base, cache.as_mut());
     render::render_check(&report);
 
     for file in &report.files {
@@ -256,7 +256,7 @@ pub fn run_explain(args: ExplainArgs) -> Result<ExitCode, ExitCode> {
 }
 
 pub fn current_dir() -> PathBuf {
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    std::env::current_dir().unwrap_or(PathBuf::from("."))
 }
 
 pub fn git_error(error: anyhow::Error) -> ExitCode {

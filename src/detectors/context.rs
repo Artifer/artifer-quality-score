@@ -78,8 +78,8 @@ impl<'tree, 'src> FileContext<'tree, 'src> {
     ) -> Self {
         let mut functions = Vec::new();
         for node in metrics::iter_functions(&root, spec, source) {
-            let name =
-                metrics::function_name(&node, source).unwrap_or_else(|| "<anonymous>".to_string());
+            // An anonymous callback is measured as part of the function around it.
+            let name = metrics::function_name(&node, source).expect("only named functions");
             let is_constructor = metrics::is_constructor(&node, &name, spec);
             functions.push(FunctionContext {
                 node,

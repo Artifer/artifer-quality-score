@@ -7,8 +7,13 @@ use aqs::profile::{self as prof, Profile};
 use std::collections::HashSet;
 
 pub fn score(source: &str, path: &str, language: &str) -> FileReport {
+    score_with(&Profile::default(), source, path, language)
+}
+
+/// Score under a profile other than the default, for a threshold a project changed.
+pub fn score_with(profile: &Profile, source: &str, path: &str, language: &str) -> FileReport {
     let spec = spec_for_name(language).expect("known language");
-    analyze_source(path, source.as_bytes(), spec, &Profile::default())
+    analyze_source(path, source.as_bytes(), spec, profile)
 }
 
 pub fn categories(report: &FileReport) -> HashSet<String> {
@@ -53,4 +58,13 @@ pub fn scratch_tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
         std::fs::write(&path, body).expect("write");
     }
     root
+}
+
+/// The class holds together: whatever else was found, Low Cohesion was not.
+pub fn assert_cohesive(report: &FileReport) {
+    let details: Vec<&String> = report.all_findings().iter().map(|f| &f.details).collect();
+    assert!(
+        !categories(report).contains(prof::LOW_COHESION),
+        "{details:?}"
+    );
 }

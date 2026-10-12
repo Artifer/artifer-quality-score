@@ -58,7 +58,6 @@ fn typescript_like(
         continuation_fields: &[],
         param_containers: set(&["formal_parameters"]),
         param_field: None,
-        receiver_field: None,
         implicit_params: set(&["this"]),
         implicit_param_nodes: HashSet::new(),
         explicit_receiver: false,

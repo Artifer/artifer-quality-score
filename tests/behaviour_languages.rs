@@ -9,7 +9,9 @@ mod support;
 
 use aqs::models::FileReport;
 use aqs::profile::{self as prof, Profile};
-use support::{assert_only_inner_is_complex, categories, detail, py, score, scratch_tree};
+use support::{
+    assert_cohesive, assert_only_inner_is_complex, categories, detail, py, score, scratch_tree,
+};
 
 // --------------------------------------------------------------------------- //
 // Rust
@@ -499,6 +501,22 @@ fn go_duplicated_blocks_are_found_inside_a_function() {
 }
 
 #[test]
+fn go_a_nil_check_on_something_other_than_an_error_is_a_branch() {
+    // Only an `err`-named value earns the exemption; `if conn != nil { return .. }` is an
+    // ordinary decision.
+    let checks: String = (0..12)
+        .map(|i| format!("\tif conn{i} != nil {{\n\t\treturn conn{i}\n\t}}\n"))
+        .collect();
+    let report = go(&format!(
+        "package p\n\nfunc pick() *Conn {{\n{checks}\treturn nil\n}}\n"
+    ));
+    assert_eq!(
+        detail(&report, prof::COMPLEX_METHOD).as_deref(),
+        Some("cc = 13")
+    );
+}
+
+#[test]
 fn go_error_guards_are_not_branches() {
     // `if err != nil { return .. }` is Rust's `?` with the sugar removed, and `?` is
     // already not counted. Counting it would judge a Go function for how many things it
@@ -803,6 +821,17 @@ fn ruby_minitest_assertions_are_recognised() {
         detail(&report, prof::LARGE_ASSERTION_BLOCKS).as_deref(),
         Some("12 consecutive assertions")
     );
+}
+
+#[test]
+fn ruby_bare_super_is_a_delegation_and_an_empty_class_is_nothing() {
+    let overrides: String = (0..6)
+        .map(|i| format!("  def step{i}\n    super\n  end\n"))
+        .collect();
+    let report = rb(&format!(
+        "class Marker\nend\n\nclass Audited < Base\n{overrides}end\n"
+    ));
+    assert_cohesive(&report);
 }
 
 #[test]

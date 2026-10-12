@@ -11,7 +11,10 @@
 mod support;
 
 use aqs::profile::{self as prof, Profile};
-use support::{assert_only_inner_is_complex, categories, detail, py, score, scratch_tree};
+use support::{
+    assert_cohesive, assert_only_inner_is_complex, categories, detail, py, score, score_with,
+    scratch_tree,
+};
 
 fn branches(n: usize) -> String {
     (0..n)
@@ -709,3 +712,205 @@ fn production_code_is_not_mistaken_for_tests() {
 // The bare-filename and empty-base cases are covered end-to-end in tests/cli.rs, which
 // sets the *child's* working directory. Testing them here meant mutating the process
 // working directory, which is unsafe under `cargo test`'s default parallelism.
+
+// --------------------------------------------------------------------------- //
+// Rules and branches nothing above reaches
+// --------------------------------------------------------------------------- //
+
+#[test]
+fn string_heavy_arguments_fires_past_three_strings() {
+    let report = py("def send(to: str, subject: str, body: str, sender: str):\n    return to\n");
+    assert_eq!(
+        detail(&report, prof::STRING_HEAVY_ARGUMENTS).as_deref(),
+        Some("4 string arguments")
+    );
+
+    let fewer = py("def send(to: str, subject: str, retries: int):\n    return to\n");
+    assert!(!categories(&fewer).contains(prof::STRING_HEAVY_ARGUMENTS));
+}
+
+/// A method long, branchy and nested enough to be a Brain Method.
+fn brain_method() -> String {
+    let arms: String = (0..14)
+        .map(|i| {
+            format!("                    if x == {i}:\n                        total += {i}\n")
+        })
+        .collect();
+    let padding: String = (0..20)
+        .map(|i| format!("        step{i} = {i}\n"))
+        .collect();
+    format!(
+        "    def decide(self, x):\n        total = 0\n{padding}        \
+         if x:\n            for item in self.items:\n                while item:\n{arms}        \
+         return total\n"
+    )
+}
+
+#[test]
+fn a_brain_class_is_a_large_class_around_a_brain_method() {
+    let methods: String = (0..16)
+        .map(|m| {
+            let body: String = (0..18)
+                .map(|i| format!("        self.v{m}_{i} = {i}\n"))
+                .collect();
+            format!("    def step{m}(self):\n{body}")
+        })
+        .collect();
+    let report = py(&format!("class Engine:\n{methods}{}", brain_method()));
+    let details = detail(&report, prof::BRAIN_CLASS).expect("a brain class");
+    assert!(details.contains("contains a Brain Method"), "{details}");
+
+    // Size alone is not the rule: the same class without the method is only large.
+    let only_large = py(&format!("class Engine:\n{methods}"));
+    assert!(!categories(&only_large).contains(prof::BRAIN_CLASS));
+}
+
+#[test]
+fn a_module_function_is_not_one_of_the_class_s_methods() {
+    let report = py("class Account:\n    \
+           def deposit(self, amount):\n        self.balance += amount\n    \
+           def withdraw(self, amount):\n        self.balance -= amount\n\n\
+         def audit(account):\n    return account.balance > 0\n");
+    assert_cohesive(&report);
+}
+
+/// A function of `lines` assignments and a return, for duplication tests.
+fn assignments(name: &str, lines: usize) -> String {
+    let body: String = (0..lines)
+        .map(|i| format!("    v{i} = source[{i}]\n"))
+        .collect();
+    format!("def {name}(source):\n{body}    return v0\n\n")
+}
+
+fn duplicated_functions(report: &aqs::models::FileReport) -> Vec<String> {
+    report
+        .all_findings()
+        .iter()
+        .filter(|f| f.category == prof::CODE_DUPLICATION)
+        .map(|f| f.function.clone().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn a_copy_is_reported_once_however_many_originals_it_matches() {
+    let source = format!(
+        "{}{}{}",
+        assignments("first", 20),
+        assignments("second", 20),
+        assignments("third", 20)
+    );
+    assert_eq!(duplicated_functions(&py(&source)), vec!["second", "third"]);
+}
+
+#[test]
+fn a_shorter_copy_is_still_a_copy() {
+    let source = format!("{}{}", assignments("long", 20), assignments("short", 19));
+    assert_eq!(duplicated_functions(&py(&source)), vec!["short"]);
+}
+
+#[test]
+fn an_assertion_run_ends_at_the_first_other_statement() {
+    let wall: String = (0..12)
+        .map(|i| format!("    assert result[{i}] == {i}\n"))
+        .collect();
+    let report = score(
+        &format!("def test_totals():\n    result = totals()\n{wall}    cleanup()\n"),
+        "tests/test_totals.py",
+        "python",
+    );
+    assert_eq!(
+        detail(&report, prof::LARGE_ASSERTION_BLOCKS).as_deref(),
+        Some("12 consecutive assertions")
+    );
+}
+
+#[test]
+fn the_block_rule_is_off_at_zero_statements() {
+    let block = "    logger.error('request failed', result.status, result.reason, attempt)\n    \
+                 metrics.increment('request.failure', result.status, tags, attempt)\n    \
+                 audit.record(user, 'request', result.status, result.reason, attempt)\n";
+    let source = format!(
+        "def load(api, user, tags, attempt):\n    result = api.get('/clips')\n{block}    return result.data\n\n\
+         def remove(api, user, tags, attempt):\n    done = api.delete('/clips')\n    result = done\n{block}    return True\n"
+    );
+    assert!(categories(&py(&source)).contains(prof::DUPLICATED_BLOCK));
+
+    let mut profile = Profile::default();
+    profile
+        .thresholds
+        .insert("duplicated_block_min_statements".into(), 0.0);
+    let off = score_with(&profile, &source, "sample.py", "python");
+    assert!(!categories(&off).contains(prof::DUPLICATED_BLOCK));
+}
+
+#[test]
+fn a_class_of_stubs_is_an_interface_not_a_set_of_responsibilities() {
+    let report = py("class Sink:\n    \
+           def open(self):\n        \"\"\"Open it.\"\"\"\n        pass\n    \
+           def write(self, data):\n        # nothing to do\n        ...\n    \
+           def flush(self):\n        raise NotImplementedError\n    \
+           def close(self):\n        pass\n");
+    assert_cohesive(&report);
+}
+
+#[test]
+fn a_comment_in_a_parameter_list_is_not_a_parameter() {
+    let report = py("def configure(\n    host,  # where\n    port,\n    # how\n    tls,\n    timeout,\n):\n    return host\n");
+    assert!(
+        !categories(&report).contains(prof::EXCESS_ARGUMENTS),
+        "four parameters, not six: {:?}",
+        categories(&report)
+    );
+}
+
+#[test]
+fn the_same_size_in_a_different_shape_is_not_a_copy() {
+    let calls: String = (0..20)
+        .map(|i| format!("    emit(v{i}, source)\n"))
+        .collect();
+    let source = format!(
+        "{}def other(source):\n{calls}    return v0\n",
+        assignments("first", 20)
+    );
+    assert!(duplicated_functions(&py(&source)).is_empty());
+}
+
+#[test]
+fn an_ampersand_that_is_not_the_problem_is_left_alone() {
+    // The repair is tried, parses no better, and is dropped: the file stays broken.
+    let report = score("function f( {\n  return a & b\n", "broken.ts", "typescript");
+    assert!(report.syntax_errors > 0);
+}
+
+#[test]
+fn accessors_and_delegations_are_not_responsibilities_of_their_own() {
+    let getters: String = (0..6)
+        .map(|i| {
+            format!("    def get{i}(self):\n        \"\"\"Field {i}.\"\"\"\n        # plain read\n        return self.field{i}\n")
+        })
+        .collect();
+    let wrapped: String = (0..4)
+        .map(|i| format!("    def check{i}(self):\n        return not super().check{i}()\n"))
+        .collect();
+    let report = py(&format!("class Record(Base):\n{getters}{wrapped}"));
+    assert_cohesive(&report);
+}
+
+fn ts(source: &str) -> aqs::models::FileReport {
+    score(source, "sample.ts", "typescript")
+}
+
+#[test]
+fn a_class_with_no_name_is_still_reported() {
+    let class = ts("export default class {\n  \
+           addOrder(o: Order) { this.orders.push(o) }\n  \
+           countOrders() { return this.orders.length + 1 }\n  \
+           addEmail(e: string) { this.emails.push(e) }\n  \
+           countEmails() { return this.emails.length + 1 }\n}\n");
+    let finding = class
+        .all_findings()
+        .into_iter()
+        .find(|f| f.category == prof::LOW_COHESION)
+        .expect("two unrelated groups");
+    assert_eq!(finding.function.as_deref(), Some("<anonymous class>"));
+}

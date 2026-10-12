@@ -32,6 +32,11 @@ fn enclosing_class<'tree>(node: &Node<'tree>, ctx: &FileContext<'tree, '_>) -> O
     None
 }
 
+/// What a finding calls the class: its name, or a placeholder for `export default class {}`.
+fn class_label(class_node: &Node, source: &[u8]) -> String {
+    metrics::class_name(class_node, source).unwrap_or_else(|| "<anonymous class>".to_string())
+}
+
 /// A large, many-method class that also contains a Brain Method.
 pub(crate) fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
     let loc_threshold = ctx.size_threshold("class_max_lines_of_code");
@@ -50,8 +55,7 @@ pub(crate) fn brain_class(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         });
         let is_brain_class = (loc as f64) > loc_threshold && (methods.len() as f64) > fn_threshold;
         if is_brain_class && has_brain_method {
-            let name = metrics::class_name(&class_node, ctx.source)
-                .unwrap_or_else(|| "<anonymous class>".to_string());
+            let name = class_label(&class_node, ctx.source);
             out.push(RawFinding {
                 category: prof::BRAIN_CLASS,
                 details: format!(
@@ -309,8 +313,7 @@ pub(crate) fn low_cohesion(ctx: &FileContext, out: &mut Vec<RawFinding>) {
         if (components as f64) <= threshold {
             continue;
         }
-        let name = metrics::class_name(&class_node, ctx.source)
-            .unwrap_or_else(|| "<anonymous class>".to_string());
+        let name = class_label(&class_node, ctx.source);
         out.push(RawFinding {
             category: prof::LOW_COHESION,
             details: format!(

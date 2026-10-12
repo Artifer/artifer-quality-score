@@ -10,7 +10,7 @@
 
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// Translate an `fnmatch` pattern into an anchored regex, following the same rules
 /// as Python's `fnmatch.translate`.
@@ -72,10 +72,9 @@ fn cache() -> &'static Mutex<HashMap<String, Regex>> {
 
 /// Whether `name` matches `pattern`, with `fnmatch` semantics.
 pub fn fnmatch(name: &str, pattern: &str) -> bool {
-    let mut guard = match cache().lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
+    // A panic elsewhere cannot corrupt a map of compiled patterns, so a poisoned lock is
+    // still good to use.
+    let mut guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
     let regex = guard
         .entry(pattern.to_string())
         .or_insert_with(|| Regex::new(&translate(pattern)).expect("translated glob is valid"));
@@ -95,6 +94,19 @@ mod tests {
     fn star_crosses_path_separators_like_fnmatch() {
         assert!(fnmatch("a/b/tests/c.py", "*/tests/*"));
         assert!(fnmatch("src/components/ui/button.tsx", "*/components/ui/*"));
+    }
+
+    #[test]
+    fn character_classes_follow_fnmatch() {
+        assert!(fnmatch("a1.py", "a[0-9].py"));
+        assert!(!fnmatch("ab.py", "a[0-9].py"));
+        assert!(fnmatch("ab.py", "a[!0-9].py"));
+        assert!(!fnmatch("a1.py", "a[!0-9].py"));
+        // A leading `]` is a member of the class, not its end.
+        assert!(fnmatch("a].py", "a[]x].py"));
+        // An unterminated `[` is a literal bracket.
+        assert!(fnmatch("a[b", "a[b"));
+        assert!(!fnmatch("ab", "a[b"));
     }
 
     #[test]

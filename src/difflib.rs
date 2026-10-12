@@ -201,6 +201,35 @@ mod tests {
         assert_eq!(ratio(&a, &a), 1.0);
     }
 
+    /// Past 200 elements `autojunk` drops the popular ones from the index, so a match is
+    /// found on the rare elements and then grown outwards over the popular ones on both
+    /// sides. Without that growth two near-identical long functions would score low.
+    #[test]
+    fn a_long_sequence_matches_across_its_popular_elements() {
+        let mut a: Vec<String> = Vec::new();
+        for index in 0..60 {
+            a.extend([
+                "(".to_string(),
+                format!("name{index}"),
+                ")".to_string(),
+                ";".to_string(),
+            ]);
+        }
+        let mut b = a.clone();
+        b[121] = "renamed".to_string();
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        let b: Vec<&str> = b.iter().map(String::as_str).collect();
+        let similarity = ratio(&a, &b);
+        assert!(similarity > 0.99 && similarity < 1.0, "{similarity}");
+    }
+
+    #[test]
+    fn an_element_outside_the_window_is_not_matched_again() {
+        // After `a b` is matched, `x` is looked for only before it in `b` — where it is not.
+        let similarity = ratio(&["x", "a", "b"], &["a", "b", "x"]);
+        assert!((similarity - 2.0 / 3.0).abs() < 1e-9, "{similarity}");
+    }
+
     #[test]
     fn disjoint_sequences_are_zero() {
         assert_eq!(ratio(&["a", "b"], &["c", "d"]), 0.0);

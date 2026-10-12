@@ -35,6 +35,7 @@ pub fn open_cache(root: Option<&Path>, profile: &Profile, enabled: bool) -> Box<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::FileReport;
 
     #[test]
     fn fingerprint_is_stable_and_policy_sensitive() {
@@ -67,7 +68,56 @@ mod tests {
         let mut cache = ReportCache::open(&directory.join(CACHE_DIRNAME), &Profile::default());
         assert!(!cache.enabled());
         assert!(cache.get("anything").is_none());
+        cache.put("anything", &report());
         cache.commit();
+        assert!(cache.get("anything").is_none());
         let _ = std::fs::remove_file(&directory);
+    }
+
+    fn report() -> FileReport {
+        FileReport::unsupported("a.py".into(), "python".into(), "unread".into())
+    }
+
+    #[test]
+    fn a_report_survives_a_round_trip_once_committed() {
+        let directory = std::env::temp_dir().join("aqs-cache-test-round-trip");
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut cache = ReportCache::open(&directory, &Profile::default());
+        assert!(cache.enabled());
+
+        cache.put("key", &report());
+        assert!(
+            cache.get("key").is_none(),
+            "nothing is stored before commit"
+        );
+        cache.commit();
+        assert_eq!(cache.get("key"), Some(report()));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_entry_from_another_schema_reads_as_a_miss() {
+        let directory = std::env::temp_dir().join("aqs-cache-test-schema");
+        let _ = std::fs::remove_dir_all(&directory);
+        let mut cache = ReportCache::open(&directory, &Profile::default());
+        rusqlite::Connection::open(directory.join(CACHE_FILENAME))
+            .expect("open")
+            .execute(
+                "INSERT INTO reports (key, report) VALUES ('old', '{\"v\": 1}')",
+                [],
+            )
+            .expect("insert");
+        assert!(cache.get("old").is_none());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_null_cache_stores_nothing() {
+        let mut cache = open_cache(None, &Profile::default(), true);
+        assert!(!cache.enabled());
+        assert_eq!(cache.fingerprint(), "");
+        cache.put("key", &report());
+        cache.commit();
+        assert!(cache.get("key").is_none());
     }
 }

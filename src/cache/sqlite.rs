@@ -21,8 +21,6 @@ pub struct ReportCache {
     connection: Option<Connection>,
     fingerprint: String,
     pending: Vec<(String, String)>,
-    hits: usize,
-    misses: usize,
 }
 
 impl ReportCache {
@@ -31,16 +29,11 @@ impl ReportCache {
         let connection = std::fs::create_dir_all(directory)
             .ok()
             .and_then(|_| Connection::open(directory.join(CACHE_FILENAME)).ok())
-            .and_then(|connection| match connection.execute_batch(SCHEMA) {
-                Ok(()) => Some(connection),
-                Err(_) => None,
-            });
+            .and_then(|connection| connection.execute_batch(SCHEMA).ok().map(|()| connection));
         Self {
             connection,
             fingerprint,
             pending: Vec::new(),
-            hits: 0,
-            misses: 0,
         }
     }
 }
@@ -56,26 +49,13 @@ impl Cache for ReportCache {
 
     fn get(&mut self, key: &str) -> Option<FileReport> {
         let connection = self.connection.as_ref()?;
-        let stored: Option<String> = connection
+        let stored: String = connection
             .query_row("SELECT report FROM reports WHERE key = ?1", [key], |row| {
                 row.get(0)
             })
-            .ok();
-        let Some(stored) = stored else {
-            self.misses += 1;
-            return None;
-        };
-        match serde_json::from_str::<FileReport>(&stored) {
-            Ok(report) => {
-                self.hits += 1;
-                Some(report)
-            }
-            Err(_) => {
-                // An entry written by an incompatible schema; treat as a miss.
-                self.misses += 1;
-                None
-            }
-        }
+            .ok()?;
+        // An entry written by an incompatible schema reads as a miss.
+        serde_json::from_str::<FileReport>(&stored).ok()
     }
 
     fn put(&mut self, key: &str, report: &FileReport) {
@@ -89,15 +69,11 @@ impl Cache for ReportCache {
 
     /// Flush pending writes in one transaction.
     fn commit(&mut self) {
-        if self.pending.is_empty() {
-            return;
-        }
-        let Some(connection) = self.connection.as_mut() else {
-            self.pending.clear();
-            return;
-        };
-        if let Ok(transaction) = connection.transaction() {
-            for (key, report) in &self.pending {
+        // Nothing is queued without a connection, so an empty batch covers both cases.
+        let pending = std::mem::take(&mut self.pending);
+        let connection = self.connection.as_mut().filter(|_| !pending.is_empty());
+        if let Some(transaction) = connection.and_then(|c| c.transaction().ok()) {
+            for (key, report) in &pending {
                 let _ = transaction.execute(
                     "INSERT OR REPLACE INTO reports (key, report) VALUES (?1, ?2)",
                     [key, report],
@@ -105,14 +81,5 @@ impl Cache for ReportCache {
             }
             let _ = transaction.commit();
         }
-        self.pending.clear();
-    }
-
-    fn hits(&self) -> usize {
-        self.hits
-    }
-
-    fn misses(&self) -> usize {
-        self.misses
     }
 }

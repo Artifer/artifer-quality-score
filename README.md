@@ -724,10 +724,10 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ## Development
 
 ```bash
-make setup                    # once per clone: point git at the hooks in .githooks
+make setup                    # once per clone: the coverage tool, and git's hooks in .githooks
 make check-fast               # lock file, rustfmt, clippy, and this repo's own score (must be 10)
-make check                    # the above, plus the 262 tests
-cargo test --test 'cli*'      # the 75 that drive the real binary
+make check                    # the above, plus the 327 tests at 100% coverage
+cargo test --test 'cli*'      # the 95 that drive the real binary
 ```
 
 The checks are defined once, in the `Makefile`, and everything else calls it:
@@ -741,7 +741,13 @@ The tool gates its own source at exactly 10. A finding that is right to leave in
 gets an `@aqs` directive with its reason, which stays visible in every report; lowering
 the threshold is not the way out. A fresh clone is not set up until `make setup` has run.
 
-Three kinds of suite, and the split is deliberate. The CLI one is spread over four files
+`make check` runs the tests under [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)
+and fails below 100% of lines or 100% of functions, closures included. The runs of the
+real binary that the CLI suites start are counted. A line no test executes is listed by
+file and number; the way out is a test, or deleting the line if nothing can reach it.
+Stable Rust has no way to exempt a line, and that is deliberate here.
+
+Three kinds of suite, and the split is deliberate. The CLI one is spread over five files
 by subject, sharing `tests/common`; the behavioural ones share `tests/support`:
 
 | suite | covers |
@@ -753,6 +759,7 @@ by subject, sharing `tests/common`; the behavioural ones share `tests/support`:
 | `tests/cli_directives.rs` | `@aqs` directives through the binary: what they suppress, how a bad one fails |
 | `tests/cli_duplication.rs` | cross-file observations, `Duplicated Block`, and what the gate says a branch introduced |
 | `tests/cli_discovery.rs` | what a scan picks up: worktrees, single-file components, each language |
+| `tests/cli_reports.rs` | what the reports say to a person: caveats, observations, `explain` listings, how `delta` and `gate` word a change |
 
 The CLI suite exists because the CLI *is* the contract — exit codes gate automation and
 the JSON shape is what a model consumes. It was previously verified only by hand, and two

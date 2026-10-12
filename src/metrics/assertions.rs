@@ -16,10 +16,7 @@ pub fn is_assertion(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
     // Most grammars wrap a statement-position call in an `expression_statement`; Ruby
     // has no such node, so there the call *is* the statement.
     let expression = if node.kind() == "expression_statement" {
-        match node.named_child(0) {
-            Some(child) => child,
-            None => return false,
-        }
+        node.named_child(0).unwrap_or(*node)
     } else {
         *node
     };

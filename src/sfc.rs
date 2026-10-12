@@ -182,6 +182,18 @@ pub fn within(ranges: &[(usize, usize)], byte: usize) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_last_line_without_a_newline_is_blanked_to_nothing() {
+        assert_eq!(extracted("<template>\n  <p>hi</p>\n</template>"), "\n\n");
+    }
+
+    #[test]
+    fn a_spread_in_the_options_object_is_not_an_option() {
+        let found =
+            declarative("export default { ...base, props: { a: Number }, data() { return {} } }");
+        assert_eq!(found, vec!["props", "data"]);
+    }
+
     fn extracted(source: &str) -> String {
         String::from_utf8(extract(source.as_bytes()).source).expect("utf-8")
     }

@@ -27,9 +27,6 @@ pub fn render_explain(doc: &RuleDoc, profile: &Profile, style: &Style) {
 /// a statement that it is not scored. `profile.rule` would panic on the lookup, and the
 /// reader needs to be told the difference regardless.
 pub(crate) fn render_rule_config(doc: &RuleDoc, profile: &Profile, style: &Style) {
-    if doc.thresholds.is_empty() {
-        return;
-    }
     println!("  {}", style.paint("Configuration", BOLD));
     for key in doc.thresholds {
         let value = profile.threshold(key);

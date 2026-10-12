@@ -19,10 +19,6 @@ impl PatternSet {
         Self(patterns.into_iter().map(Into::into).collect())
     }
 
-    pub fn as_slice(&self) -> &[String] {
-        &self.0
-    }
-
     /// Whether `path` matches any pattern in the set.
     ///
     /// Beyond a plain `fnmatch`, each pattern is also matched against every individual
@@ -45,10 +41,6 @@ impl PatternSet {
 
     pub fn contains(&self, value: &str) -> bool {
         self.0.iter().any(|item| item == value)
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, String> {
-        self.0.iter()
     }
 
     pub fn sorted(&self) -> Vec<&String> {

@@ -66,9 +66,6 @@ pub struct LanguageSpec {
     /// the parameters and the results -- so taking the first one would measure the
     /// receiver and call it the signature.
     pub param_field: Option<&'static str>,
-    /// Field holding an implicit receiver declared outside the parameter list, as Go's
-    /// `func (m *Money) Doubled()` does.
-    pub receiver_field: Option<&'static str>,
     /// Implicit receiver parameters that should not count against a signature.
     pub implicit_params: HashSet<&'static str>,
     /// Node kinds that *are* an implicit receiver. Rust models `&self` as its own
@@ -184,10 +181,6 @@ pub fn spec_for_path(path: &str) -> Option<&'static LanguageSpec> {
 
 pub fn spec_for_name(name: &str) -> Option<&'static LanguageSpec> {
     specs().iter().find(|spec| spec.name == name)
-}
-
-pub fn is_supported_path(path: &str) -> bool {
-    spec_for_path(path).is_some()
 }
 
 #[cfg(test)]
