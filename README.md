@@ -724,17 +724,31 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ## Development
 
 ```bash
-cargo test                    # 261 tests
-cargo test --test 'cli*'      # 75 of them drive the real binary
+make setup                    # once per clone: point git at the hooks in .githooks
+make check-fast               # lock file, rustfmt, clippy, and this repo's own score (must be 10)
+make check                    # the above, plus the 262 tests
+cargo test --test 'cli*'      # the 75 that drive the real binary
 ```
 
+The checks are defined once, in the `Makefile`, and everything else calls it:
+
+| | runs |
+| --- | --- |
+| `make check-fast` | before every commit, and when Claude Code wants to end a turn with changes in the tree (`.claude/hooks/check-on-stop.sh`) |
+| `make check` | before every push, on every push in CI, and in the release preflight before anything is built |
+
+The tool gates its own source at exactly 10. A finding that is right to leave in place
+gets an `@aqs` directive with its reason, which stays visible in every report; lowering
+the threshold is not the way out. A fresh clone is not set up until `make setup` has run.
+
 Three kinds of suite, and the split is deliberate. The CLI one is spread over four files
-by subject, sharing `tests/common`:
+by subject, sharing `tests/common`; the behavioural ones share `tests/support`:
 
 | suite | covers |
 | --- | --- |
 | unit tests in `src/` | measurement primitives, glob and difflib parity, config validation |
 | `tests/behaviour.rs` | one test per rule — that it fires, and that it stays quiet on correct code |
+| `tests/behaviour_languages.rs` | the same rules read through Rust, Go, Ruby, Java and PHP |
 | `tests/cli.rs` | the binary itself: exit codes, JSON shape, git-backed `delta` and `gate` |
 | `tests/cli_directives.rs` | `@aqs` directives through the binary: what they suppress, how a bad one fails |
 | `tests/cli_duplication.rs` | cross-file observations, `Duplicated Block`, and what the gate says a branch introduced |
