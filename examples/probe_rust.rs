@@ -4,7 +4,7 @@
 //! rather than from what its node names are assumed to be. Every other language spec
 //! in this crate was derived the same way.
 
-use tree_sitter::{Node, Parser};
+mod support;
 
 const SAMPLE: &str = r####"
 pub struct Money { amount: i64, currency: String }
@@ -51,53 +51,24 @@ mod tests {
 }
 "####;
 
+/// The node kinds the detectors depend on.
+const WANTED: &[&str] = &[
+    "impl_item",
+    "trait_item",
+    "function_item",
+    "parameter",
+    "self_parameter",
+    "closure_expression",
+    "if_expression",
+    "macro_invocation",
+    "struct_item",
+    "type_item",
+    "enum_item",
+];
+
+/// The fields shown for each of them; see `support::run` for the suffixes.
+const FIELDS: &[&str] = &["name", "type", "pattern", "condition", "body?", "trait"];
+
 fn main() {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_rust::LANGUAGE.into())
-        .expect("grammar loads");
-    let tree = parser.parse(SAMPLE, None).expect("parses");
-
-    let mut kinds: Vec<String> = Vec::new();
-    let mut stack: Vec<Node> = vec![tree.root_node()];
-    let mut errors = 0;
-    while let Some(node) = stack.pop() {
-        if node.kind() == "ERROR" || node.is_missing() {
-            errors += 1;
-        }
-        kinds.push(node.kind().to_string());
-        let mut cursor = node.walk();
-        stack.extend(node.children(&mut cursor));
-    }
-    kinds.sort();
-    kinds.dedup();
-
-    // Structure of the pieces the detectors depend on.
-    fn dump(node: Node, src: &str, depth: usize, want: &[&str]) {
-        if want.contains(&node.kind()) {
-            let text = node.utf8_text(src.as_bytes()).unwrap_or("");
-            let first: String = text.lines().next().unwrap_or("").chars().take(70).collect();
-            println!("  {}{}  fields: name={:?} type={:?} pattern={:?} condition={:?} body={:?} trait={:?}",
-                "  ".repeat(depth), node.kind(),
-                node.child_by_field_name("name").map(|n| n.utf8_text(src.as_bytes()).unwrap_or("")),
-                node.child_by_field_name("type").map(|n| n.utf8_text(src.as_bytes()).unwrap_or("")),
-                node.child_by_field_name("pattern").map(|n| n.utf8_text(src.as_bytes()).unwrap_or("")),
-                node.child_by_field_name("condition").map(|n| n.utf8_text(src.as_bytes()).unwrap_or("")),
-                node.child_by_field_name("body").is_some(),
-                node.child_by_field_name("trait").map(|n| n.utf8_text(src.as_bytes()).unwrap_or("")));
-            let _ = first;
-        }
-        let mut c = node.walk();
-        for ch in node.children(&mut c) { dump(ch, src, depth + 1, want); }
-    }
-    println!("--- structure ---");
-    dump(tree.root_node(), SAMPLE, 0, &["impl_item","trait_item","function_item","parameter","self_parameter","closure_expression","if_expression","macro_invocation","struct_item","type_item","enum_item"]);
-    println!("parse errors: {errors}");
-    println!("root: {}", tree.root_node().kind());
-    for kind in kinds
-        .iter()
-        .filter(|k| k.chars().all(|c| c.is_alphanumeric() || c == '_') && k.len() > 2)
-    {
-        println!("  {kind}");
-    }
+    support::run(tree_sitter_rust::LANGUAGE.into(), SAMPLE, WANTED, FIELDS);
 }

@@ -1092,8 +1092,9 @@ fn go_test_files_are_recognised_by_their_required_suffix() {
 #[test]
 fn go_vendored_dependencies_are_excluded() {
     let profile = Profile::default();
-    assert!(profile.exclude_patterns.matches("vendor/github.com/pkg/errors/errors.go"));
-    assert!(profile.exclude_patterns.matches("api/v1/service.pb.go"));
+    for path in ["vendor/github.com/pkg/errors/errors.go", "api/v1/service.pb.go"] {
+        assert!(profile.exclude_patterns.matches(path), "{path} is not ours to score");
+    }
     assert!(!profile.exclude_patterns.matches("internal/vendors/stripe.go"));
 }
 
@@ -1399,6 +1400,21 @@ fn ruby_spec_and_test_directories_are_test_code() {
 // Java
 // --------------------------------------------------------------------------- //
 
+/// Fields read through getters hold a class together; unrelated groups of them do not.
+///
+/// `value_object` is six getters over six fields, `mixed` is two collections each touched
+/// by its own pair of methods. Every class-based language has to tell the two apart, and
+/// what differs between them is only how a method reaches a field.
+fn assert_cohesion_follows_field_use(value_object: &FileReport, mixed: &FileReport) {
+    assert!(
+        !categories(value_object).contains(prof::LOW_COHESION),
+        "a value object of six getters is not six responsibilities: {:?}",
+        value_object.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
+    );
+    let details = detail(mixed, prof::LOW_COHESION).expect("fires on two unrelated groups");
+    assert!(details.contains("LCOM4 = 2"), "{details}");
+}
+
 fn java(source: &str) -> FileReport {
     score(source, "Sample.java", "java")
 }
@@ -1488,19 +1504,11 @@ fn java_bare_field_reads_are_field_reads() {
         .map(|i| format!("    long get{i}() {{ return field{i}; }}\n"))
         .collect();
     let fields: String = (0..6).map(|i| format!("    private long field{i};\n")).collect();
-    let report = java(&in_class(&format!("{fields}{getters}")));
-    assert!(
-        !categories(&report).contains(prof::LOW_COHESION),
-        "a value object of six getters is not six responsibilities: {:?}",
-        report.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
-    );
-
-    // Two collections touched by two unrelated pairs is still real low cohesion.
+    let value_object = java(&in_class(&format!("{fields}{getters}")));
     let mixed = java(&in_class(
         "    private List<String> orders;\n    private List<String> emails;\n    void addOrder(String o) { orders.add(o); }\n    int countOrders() { return orders.size() + 1; }\n    void addEmail(String e) { emails.add(e); }\n    int countEmails() { return emails.size() + 1; }\n",
     ));
-    let details = detail(&mixed, prof::LOW_COHESION).expect("fires on two unrelated groups");
-    assert!(details.contains("LCOM4 = 2"), "{details}");
+    assert_cohesion_follows_field_use(&value_object, &mixed);
 }
 
 #[test]
@@ -1663,18 +1671,11 @@ fn php_this_properties_are_instance_state() {
         .map(|i| format!("    function get{i}() {{ return $this->field{i}; }}\n"))
         .collect();
     let fields: String = (0..6).map(|i| format!("    private int $field{i};\n")).collect();
-    let report = php(&in_php_class(&format!("{fields}{getters}")));
-    assert!(
-        !categories(&report).contains(prof::LOW_COHESION),
-        "a value object of six getters is not six responsibilities: {:?}",
-        report.all_findings().iter().map(|f| &f.details).collect::<Vec<_>>()
-    );
-
+    let value_object = php(&in_php_class(&format!("{fields}{getters}")));
     let mixed = php(&in_php_class(
         "    private array $orders;\n    private array $emails;\n    function addOrder($o) { $this->orders[] = $o; }\n    function countOrders() { return count($this->orders) + 1; }\n    function addEmail($e) { $this->emails[] = $e; }\n    function countEmails() { return count($this->emails) + 1; }\n",
     ));
-    let details = detail(&mixed, prof::LOW_COHESION).expect("fires on two unrelated groups");
-    assert!(details.contains("LCOM4 = 2"), "{details}");
+    assert_cohesion_follows_field_use(&value_object, &mixed);
 }
 
 #[test]

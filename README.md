@@ -724,17 +724,21 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ## Development
 
 ```bash
-cargo test                    # 131 tests
-cargo test --test cli         # 29 of them drive the real binary
+cargo test                    # 261 tests
+cargo test --test 'cli*'      # 75 of them drive the real binary
 ```
 
-Three suites, and the split is deliberate:
+Three kinds of suite, and the split is deliberate. The CLI one is spread over four files
+by subject, sharing `tests/common`:
 
 | suite | covers |
 | --- | --- |
 | unit tests in `src/` | measurement primitives, glob and difflib parity, config validation |
 | `tests/behaviour.rs` | one test per rule — that it fires, and that it stays quiet on correct code |
 | `tests/cli.rs` | the binary itself: exit codes, JSON shape, git-backed `delta` and `gate` |
+| `tests/cli_directives.rs` | `@aqs` directives through the binary: what they suppress, how a bad one fails |
+| `tests/cli_duplication.rs` | cross-file observations, `Duplicated Block`, and what the gate says a branch introduced |
+| `tests/cli_discovery.rs` | what a scan picks up: worktrees, single-file components, each language |
 
 The CLI suite exists because the CLI *is* the contract — exit codes gate automation and
 the JSON shape is what a model consumes. It was previously verified only by hand, and two
