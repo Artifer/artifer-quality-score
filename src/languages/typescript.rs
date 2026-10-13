@@ -44,7 +44,9 @@ fn typescript_like(
         extensions,
         language,
         function_nodes: set(TS_FUNCTIONS),
-        class_nodes: set(&["class_declaration", "class"]),
+        // `abstract class` is a node kind of its own, and a class like any other for
+        // every rule but cohesion.
+        class_nodes: set(&["class_declaration", "abstract_class_declaration", "class"]),
         module_node: "program",
         statement_containers: set(&["statement_block", "program"]),
         decision_nodes: set(TS_DECISION),

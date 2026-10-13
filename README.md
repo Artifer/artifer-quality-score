@@ -299,8 +299,9 @@ counts as resolving it.
 - **Only annotated parameters count for type smells.** An unannotated parameter
   is absence of evidence, not evidence of bad design — otherwise the score would
   measure how thoroughly the code is typed rather than how well it is designed.
-- **Interfaces are exempt from Low Cohesion.** ABCs, Protocols and all-stub
-  classes have no shared state by definition. Flagging them would be telling you
+- **Interfaces are exempt from Low Cohesion.** ABCs, Protocols, all-stub classes
+  and a class declared `abstract` in TypeScript, Java or PHP are contracts for
+  something else to fill in. An abstract class is still a class for every other rule. Flagging them would be telling you
   to stop declaring interfaces.
 - **Test classes are exempt from cohesion and size rules.** Independent test
   methods are the goal. See `test_exempt_rules`.
@@ -726,7 +727,7 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ```bash
 make setup                    # once per clone: the coverage tool, and git's hooks in .githooks
 make check-fast               # lock file, rustfmt, clippy, and this repo's own score (must be 10)
-make check                    # the above, plus the 395 tests at 100% coverage
+make check                    # the above, plus the 396 tests at 100% coverage
 cargo test --test 'cli*'      # the 106 that drive the real binary
 ```
 

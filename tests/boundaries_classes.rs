@@ -6,8 +6,8 @@
 mod support;
 
 use aqs::models::FileReport;
-use aqs::profile as prof;
-use support::{assert_cohesive, detail, score};
+use aqs::profile::{self as prof, Profile};
+use support::{assert_cohesive, categories, detail, score, score_with};
 
 /// Two methods that share `self.balance`, then `third`.
 fn account(header: &str, third: &str) -> FileReport {
@@ -75,23 +75,59 @@ fn an_abstract_base_or_an_abstract_method_makes_the_class_an_interface() {
     assert_cohesive(&account("class Account:", &decorated));
 }
 
+/// Two methods on the balance and one on the name, in each language's own spelling.
+const DECLARED: [(&str, &str, &str); 3] = [
+    (
+        "typescript",
+        "account.ts",
+        "class Account {\n  \
+         deposit(n: number) { this.balance += n; return this.balance; }\n  \
+         withdraw(n: number) { this.balance -= n; return this.balance; }\n  \
+         rename(name: string) { this.name = name; return this.name; }\n}\n",
+    ),
+    (
+        "java",
+        "Account.java",
+        "public class Account {\n  int balance; String name;\n  \
+         int deposit(int n) { this.balance += n; return this.balance; }\n  \
+         int withdraw(int n) { this.balance -= n; return this.balance; }\n  \
+         String rename(String name) { this.name = name; return this.name; }\n}\n",
+    ),
+    (
+        "php",
+        "Account.php",
+        "<?php\nclass Account {\n  \
+         function deposit($n) { $this->balance += $n; return $this->balance; }\n  \
+         function withdraw($n) { $this->balance -= $n; return $this->balance; }\n  \
+         function rename($name) { $this->name = $name; return $this->name; }\n}\n",
+    ),
+];
+
 #[test]
-fn a_typescript_abstract_class_is_not_judged_on_cohesion() {
-    let body = "  deposit(n: number) { this.balance += n; return this.balance; }\n  \
-                withdraw(n: number) { this.balance -= n; return this.balance; }\n  \
-                rename(name: string) { this.name = name; return this.name; }\n";
-    let concrete = score(
-        &format!("class Account {{\n{body}}}\n"),
-        "account.ts",
-        "typescript",
-    );
-    assert_two_responsibilities(&concrete);
-    let declared = score(
-        &format!("abstract class Account {{\n{body}}}\n"),
-        "account.ts",
-        "typescript",
-    );
-    assert_cohesive(&declared);
+fn a_class_declared_abstract_is_an_interface_in_every_language_that_has_the_word() {
+    for (language, path, source) in DECLARED {
+        assert_two_responsibilities(&score(source, path, language));
+        let declared = source.replacen("class Account", "abstract class Account", 1);
+        assert_cohesive(&score(&declared, path, language));
+    }
+}
+
+#[test]
+fn an_abstract_class_is_still_a_class_for_the_other_rules() {
+    let mut profile = Profile::default();
+    for key in [
+        "class_max_lines_of_code",
+        "class_max_functions",
+        "brain_method_lines_of_code",
+        "brain_method_cyclomatic_complexity",
+        "brain_method_nesting_depth",
+    ] {
+        profile.thresholds.insert(key.to_string(), 0.0);
+    }
+    let source = "abstract class Engine {\n  start() { return 1; }\n  \
+                  decide(x: number) {\n    if (x) {\n      return 1;\n    }\n    return 0;\n  }\n}\n";
+    let report = score_with(&profile, source, "engine.ts", "typescript");
+    assert!(categories(&report).contains(prof::BRAIN_CLASS));
 }
 
 #[test]

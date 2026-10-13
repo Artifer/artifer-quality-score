@@ -212,14 +212,32 @@ pub(crate) fn implements_external_interface(node: &Node, spec: &LanguageSpec) ->
         .is_some_and(|field| node.child_by_field_name(field).is_some())
 }
 
-/// Whether a class is an interface — an abstract base, a Protocol, all stubs, or a
-/// trait impl.
+/// Whether the class is declared `abstract`.
+///
+/// The keyword sits among the class's own children in TypeScript, in a `modifiers` list
+/// in Java, and is an `abstract_modifier` in PHP. All three say what `class Base(ABC)`
+/// says in Python: this is a contract for subclasses to fill in.
+pub(crate) fn has_abstract_modifier(node: &Node) -> bool {
+    let mut cursor = node.walk();
+    let own: Vec<Node> = node.children(&mut cursor).collect();
+    own.iter().any(|child| {
+        let mut cursor = child.walk();
+        let is_keyword = |kind: &str| matches!(kind, "abstract" | "abstract_modifier");
+        let listed = child.kind() == "modifiers"
+            && child.children(&mut cursor).any(|m| is_keyword(m.kind()));
+        listed || is_keyword(child.kind())
+    })
+}
+
+/// Whether a class is an interface — declared abstract, an abstract base, a Protocol,
+/// all stubs, or a trait impl.
 ///
 /// Interfaces have no shared state and no internal calls by definition, so cohesion
 /// metrics always condemn them. Flagging an ABC for "low cohesion" would be telling the
 /// author to stop declaring interfaces.
 pub fn is_abstract_class(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    implements_external_interface(node, spec)
+    has_abstract_modifier(node)
+        || implements_external_interface(node, spec)
         || has_abstract_base(node, source)
         || has_abstract_decorator(node, source)
         || is_all_stubs(node, spec, source)
