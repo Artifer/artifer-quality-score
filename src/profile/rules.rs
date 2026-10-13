@@ -341,3 +341,23 @@ pub const RULE_DEFAULTS: &[(&str, RuleConfig)] = &[
         },
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_penalty_grows_with_the_excess_and_is_then_weighted() {
+        let rule = RuleConfig {
+            base: 1.0,
+            scale: 2.0,
+            cap: 10.0,
+            file_cap: 10.0,
+            weight: 0.5,
+        };
+        // Four past the threshold is two scales: three times the base, at half weight.
+        assert_eq!(rule.penalty(7.0, 3.0), 1.5);
+        // The cap applies before the weight does.
+        assert_eq!(rule.penalty(99.0, 3.0), 5.0);
+    }
+}

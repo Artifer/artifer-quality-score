@@ -144,3 +144,68 @@ fn introduced_observations(baseline: &ScanReport, current: &ScanReport) -> Vec<O
         .cloned()
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ObservationSite;
+
+    fn file(path: &str, score: f64) -> FileReport {
+        let mut report = FileReport::unsupported(path.into(), "python".into(), String::new());
+        report.score = score;
+        report
+    }
+
+    fn scan(files: Vec<FileReport>, observations: Vec<Observation>) -> ScanReport {
+        ScanReport {
+            version: VERSION.to_string(),
+            profile: "artifer".to_string(),
+            score: SCORE_MAX,
+            loc: 0,
+            files,
+            observations,
+        }
+    }
+
+    fn observation(category: &str, functions: [&str; 2]) -> Observation {
+        Observation {
+            category: category.to_string(),
+            details: String::new(),
+            sites: functions
+                .iter()
+                .map(|function| ObservationSite {
+                    path: "a.py".to_string(),
+                    line: 1,
+                    function: Some(function.to_string()),
+                })
+                .collect(),
+            dismissed: None,
+        }
+    }
+
+    #[test]
+    fn a_file_change_is_the_new_score_less_the_old() {
+        let baseline = scan(vec![file("a.py", 9.0), file("gone.py", 7.0)], vec![]);
+        let current = scan(vec![file("a.py", 8.5), file("new.py", 6.0)], vec![]);
+        let changed: Vec<String> = ["a.py", "gone.py", "new.py"].map(String::from).to_vec();
+        let changes: Vec<(String, f64)> = file_deltas(&baseline, &current, &changed)
+            .into_iter()
+            .map(|delta| (delta.path, delta.score_change))
+            .collect();
+        // A file with no report on one side counts as a perfect score there.
+        let expected = [("new.py", -4.0), ("a.py", -0.5), ("gone.py", 3.0)];
+        assert_eq!(
+            changes,
+            expected.map(|(path, change)| (path.to_string(), change))
+        );
+    }
+
+    #[test]
+    fn an_observation_is_new_when_its_rule_or_its_sites_are() {
+        let known = observation("Code Duplication", ["load", "save"]);
+        let elsewhere = observation("Code Duplication", ["read", "write"]);
+        let baseline = scan(vec![], vec![known.clone()]);
+        let current = scan(vec![], vec![known, elsewhere.clone()]);
+        assert_eq!(introduced_observations(&baseline, &current), [elsewhere]);
+    }
+}

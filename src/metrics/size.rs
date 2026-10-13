@@ -82,3 +82,22 @@ pub fn normalised_tokens(node: &Node, spec: &LanguageSpec, source: &[u8]) -> Vec
     }
     tokens
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::languages::spec_for_name;
+
+    #[test]
+    fn tokens_are_the_leaves_with_names_literals_and_comments_levelled() {
+        let source = "total = compute(4)  # why\n";
+        let spec = spec_for_name("python").expect("known language");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&spec.language())
+            .expect("grammar loads");
+        let tree = parser.parse(source, None).expect("parses");
+        let tokens = normalised_tokens(&tree.root_node(), spec, source.as_bytes());
+        assert_eq!(tokens, ["<id>", "=", "<id>", "(", "<lit>", ")"]);
+    }
+}

@@ -84,6 +84,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
         let mut cache = ReportCache::open(&directory, &Profile::default());
         assert!(cache.enabled());
+        assert_eq!(
+            cache.fingerprint(),
+            keys::profile_fingerprint(&Profile::default())
+        );
 
         cache.put("key", &report());
         assert!(

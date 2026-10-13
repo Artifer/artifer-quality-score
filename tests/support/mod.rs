@@ -1,4 +1,5 @@
 //! What the behavioural suites share: score a snippet, then ask what was found.
+#![allow(dead_code)]
 
 use aqs::analyze::analyze_source;
 use aqs::languages::spec_for_name;

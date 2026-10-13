@@ -134,3 +134,32 @@ pub fn all_nodes<'tree>(root: &Node<'tree>) -> Vec<Node<'tree>> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_range_counts_lines_and_columns_from_one() {
+        let source = "x = 1\nif x:\n    total = x\n";
+        let mut parser = tree_sitter::Parser::new();
+        let language = tree_sitter_python::LANGUAGE.into();
+        parser.set_language(&language).expect("grammar loads");
+        let tree = parser.parse(source, None).expect("parses");
+        let assignment = all_nodes(&tree.root_node())
+            .into_iter()
+            .filter(|node| node.kind() == "assignment")
+            .nth(1)
+            .expect("the nested assignment");
+        let range = to_range(&assignment);
+        assert_eq!(
+            (
+                range.start_line,
+                range.start_column,
+                range.end_line,
+                range.end_column
+            ),
+            (3, 5, 3, 14)
+        );
+    }
+}

@@ -128,6 +128,24 @@ mod tests {
     }
 
     #[test]
+    fn the_columns_share_what_the_fixed_ones_leave() {
+        let columns = |width: usize| {
+            let layout = Layout::for_width(width);
+            (
+                layout.rule,
+                layout.function,
+                layout.details,
+                layout.show_function,
+            )
+        };
+        // 21 columns are spoken for, which leaves 79 of a 100-wide terminal.
+        assert_eq!(columns(100), (28, 20, 29, true));
+        // The function column goes once fewer than 46 are left to share.
+        assert_eq!(columns(67), (16, 11, 17, true));
+        assert_eq!(columns(66), (20, 0, 25, false));
+    }
+
+    #[test]
     fn a_finding_past_the_rule_cap_says_so() {
         let style = Style::new(false, 100);
         assert_eq!(penalty_text(&finding(1, 0.0), &style), "capped");

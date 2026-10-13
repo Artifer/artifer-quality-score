@@ -371,4 +371,30 @@ mod tests {
     fn empty_input_is_perfect_not_zero() {
         assert_eq!(aggregate_score(&[]), SCORE_MAX);
     }
+
+    #[test]
+    fn a_file_with_no_code_or_no_reading_carries_no_weight() {
+        let empty = report(4.0, 0);
+        assert_eq!(aggregate_score(std::slice::from_ref(&empty)), SCORE_MAX);
+        let mut unread = report(2.0, 300);
+        unread.error = Some("unreadable".into());
+        assert_eq!(aggregate_score(&[unread, empty, report(9.0, 10)]), 9.0);
+    }
+
+    #[test]
+    fn only_a_falling_score_is_a_regression() {
+        let moved = |score_change: f64| FileDelta {
+            path: "f.py".into(),
+            old_score: None,
+            new_score: None,
+            score_change,
+            introduced: vec![],
+            fixed: vec![],
+            degraded: vec![],
+            improved: vec![],
+        };
+        assert!(moved(-0.01).is_regression());
+        assert!(!moved(0.0).is_regression());
+        assert!(!moved(0.01).is_regression());
+    }
 }

@@ -49,6 +49,7 @@ fn scan_says_when_a_score_is_approximate_or_a_file_was_skipped() {
         &[
             ("broken.py", "def f(:\n    return (\n"),
             ("locked.py", CLEAN),
+            ("sound.py", CLEAN),
         ],
     );
     let locked = tree.path().join("locked.py");
@@ -84,6 +85,8 @@ fn scan_lists_open_observations_with_every_site() {
             "reportFailure",
         ],
     );
+    // An open observation is not a dismissed one.
+    assert!(!run.stdout.contains("dismissed"), "{}", run.stdout);
 }
 
 #[test]

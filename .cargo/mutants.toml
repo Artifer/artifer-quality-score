@@ -1,0 +1,9 @@
+# Settings for `cargo mutants`.
+#
+# Every mutant excluded here is one no test can tell from the original, with the reason
+# why. Anything else that survives is a gap in the suite, to be closed with a test.
+exclude_re = [
+    # `glob::cache` memoises compiled patterns. Handing out a fresh map each time
+    # compiles every pattern again and matches exactly the same names.
+    "replace cache -> ",
+]

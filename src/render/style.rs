@@ -149,6 +149,12 @@ mod tests {
     };
 
     #[test]
+    fn a_line_wraps_when_the_next_word_and_its_space_no_longer_fit() {
+        assert_eq!(wrap("ab cd", 5), ["ab cd"]);
+        assert_eq!(wrap("ab cd", 4), ["ab", "cd"]);
+    }
+
+    #[test]
     fn a_score_is_coloured_by_its_band() {
         assert_eq!(score_colour(HEALTHY), GREEN);
         assert_eq!(score_colour(WARNING), YELLOW);

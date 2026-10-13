@@ -194,6 +194,15 @@ mod tests {
         assert_eq!(found, vec!["props", "data"]);
     }
 
+    #[test]
+    fn a_range_holds_its_first_byte_and_not_its_end() {
+        let ranges = [(2, 5)];
+        assert!(!within(&ranges, 1));
+        assert!(within(&ranges, 2));
+        assert!(within(&ranges, 4));
+        assert!(!within(&ranges, 5));
+    }
+
     fn extracted(source: &str) -> String {
         String::from_utf8(extract(source.as_bytes()).source).expect("utf-8")
     }

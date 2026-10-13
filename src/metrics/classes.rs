@@ -212,15 +212,14 @@ pub(crate) fn implements_external_interface(node: &Node, spec: &LanguageSpec) ->
         .is_some_and(|field| node.child_by_field_name(field).is_some())
 }
 
-/// Whether a class is an interface — abstract, Protocol, all-stubs, or a trait impl.
+/// Whether a class is an interface — an abstract base, a Protocol, all stubs, or a
+/// trait impl.
 ///
 /// Interfaces have no shared state and no internal calls by definition, so cohesion
 /// metrics always condemn them. Flagging an ABC for "low cohesion" would be telling the
 /// author to stop declaring interfaces.
 pub fn is_abstract_class(node: &Node, spec: &LanguageSpec, source: &[u8]) -> bool {
-    node.kind().contains("abstract")
-        || node.prev_sibling().is_some_and(|p| p.kind() == "abstract")
-        || implements_external_interface(node, spec)
+    implements_external_interface(node, spec)
         || has_abstract_base(node, source)
         || has_abstract_decorator(node, source)
         || is_all_stubs(node, spec, source)

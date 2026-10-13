@@ -187,3 +187,14 @@ impl<S: Into<String>> FromIterator<S> for PatternSet {
         Self(iter.into_iter().map(Into::into).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorted_lists_every_pattern_in_order() {
+        let set = PatternSet::new(["*/b/*", "*.a", "c_*"]);
+        assert_eq!(set.sorted(), ["*.a", "*/b/*", "c_*"]);
+    }
+}

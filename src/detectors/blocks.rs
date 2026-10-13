@@ -286,3 +286,34 @@ fn emit(copies: &[Span], sequences: &[Vec<Node>], ctx: &FileContext, out: &mut V
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(sequence: usize, start: usize, length: usize) -> Span {
+        Span {
+            sequence,
+            start,
+            length,
+        }
+    }
+
+    #[test]
+    fn spans_overlap_when_they_share_a_statement_of_one_sequence() {
+        let block = span(0, 2, 3);
+        for (other, shared) in [
+            (span(0, 4, 3), true),
+            (span(0, 0, 3), true),
+            (span(0, 3, 1), true),
+            // Touching is not sharing: one ends where the other begins.
+            (span(0, 5, 3), false),
+            (span(0, 0, 2), false),
+            // The same statements of another sequence are other statements.
+            (span(1, 2, 3), false),
+        ] {
+            assert_eq!(block.overlaps(&other), shared);
+            assert_eq!(other.overlaps(&block), shared);
+        }
+    }
+}

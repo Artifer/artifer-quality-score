@@ -415,4 +415,125 @@ mod tests {
         let outside = display_path(Path::new("elsewhere/a.py"), Path::new("no/such"));
         assert_eq!(outside, "elsewhere/a.py");
     }
+
+    #[test]
+    fn an_ampersand_beside_another_or_before_an_equals_is_an_operator() {
+        let operators: [(&[u8], usize); 4] =
+            [(b"a && b", 2), (b"a && b", 3), (b"a &= b", 2), (b"&& b", 0)];
+        for (source, index) in operators {
+            assert!(
+                is_operator_ampersand(source, index),
+                "{source:?} at {index}"
+            );
+        }
+        let bare: [(&[u8], usize); 3] = [(b"a & b", 2), (b"& b", 0), (b"a &", 2)];
+        for (source, index) in bare {
+            assert!(
+                !is_operator_ampersand(source, index),
+                "{source:?} at {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_entity_is_a_name_closed_by_a_semicolon_or_a_number() {
+        for entity in ["&amp;", "&#39;", "&nbsp; x", "&#x27;"] {
+            let source = format!("a {entity}");
+            assert!(
+                begins_entity(source.as_bytes(), 2, source.len()),
+                "{entity}"
+            );
+        }
+        // No name, a name that never closes, and a name closed by something else.
+        for bare in ["&;", "& b;", "&amp", "&amp b;", "&"] {
+            let source = format!("a {bare}");
+            assert!(!begins_entity(source.as_bytes(), 2, source.len()), "{bare}");
+        }
+        // The entity has to close inside the error node, not somewhere after it.
+        assert!(!begins_entity(b"a &amp;", 2, 6));
+    }
+
+    fn bare_offsets(path: &str, source: &str) -> Vec<usize> {
+        let spec = spec_for_path(path).expect("a supported extension");
+        let mut parser = Parser::new();
+        parser
+            .set_language(&spec.language())
+            .expect("grammar loads");
+        let tree = parser.parse(source, None).expect("parses");
+        bare_ampersand_offsets(source.as_bytes(), &tree.root_node())
+    }
+
+    #[test]
+    fn only_an_ampersand_inside_a_parse_error_is_collected() {
+        let jsx = "export function H() {\n  return <h1>A & B</h1>;\n}\n";
+        let mut found = bare_offsets("h.tsx", jsx);
+        found.dedup();
+        assert_eq!(found, [jsx.find('&').expect("has one")]);
+        // A bitwise `&` in code that parses is nobody's mistake.
+        assert!(bare_offsets("a.ts", "const a = b & c;\n").is_empty());
+    }
+
+    /// A cache that answers one key and remembers what it was asked.
+    struct Recording {
+        known: String,
+        asked: Vec<String>,
+        stored: Vec<String>,
+    }
+
+    impl Cache for Recording {
+        fn enabled(&self) -> bool {
+            true
+        }
+        fn fingerprint(&self) -> &str {
+            "f"
+        }
+        fn get(&mut self, key: &str) -> Option<FileReport> {
+            self.asked.push(key.to_string());
+            (key == self.known)
+                .then(|| FileReport::unsupported("hit".into(), "python".into(), String::new()))
+        }
+        fn put(&mut self, key: &str, _report: &FileReport) {
+            self.stored.push(key.to_string());
+        }
+        fn commit(&mut self) {
+            self.stored.push("commit".to_string());
+        }
+    }
+
+    #[test]
+    fn a_cached_job_is_answered_and_the_rest_is_left_to_do() {
+        let job = |path: &str| AnalysisJob {
+            path: path.to_string(),
+            language: "python",
+            source: b"x = 1\n".to_vec(),
+        };
+        let jobs = [job("a.py"), job("b.py")];
+        let keys: Vec<String> = jobs
+            .iter()
+            .map(|job| content_key(&job.path, &job.source, "f"))
+            .collect();
+        let mut cache = Recording {
+            known: keys[0].clone(),
+            asked: Vec::new(),
+            stored: Vec::new(),
+        };
+
+        let (slots, pending) = partition_cached(&jobs, &mut cache, "f", true);
+        assert_eq!(slots[0].as_ref().map(|hit| hit.path.as_str()), Some("hit"));
+        assert!(slots[1].is_none());
+        assert_eq!(pending, [(1, keys[1].clone())]);
+
+        // Switched off, the cache is not even consulted and nothing gets a key.
+        cache.asked.clear();
+        let (slots, pending) = partition_cached(&jobs, &mut cache, "f", false);
+        assert!(slots.iter().all(Option::is_none));
+        assert_eq!(pending, [(0, String::new()), (1, String::new())]);
+        assert!(cache.asked.is_empty());
+
+        // A whole batch stores only what it had to work out, then commits.
+        let reports = analyze_jobs(&jobs, &Profile::default(), &mut cache);
+        let paths: Vec<&str> = reports.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(paths, ["hit", "b.py"]);
+        assert_eq!(cache.stored, [keys[1].as_str(), "commit"]);
+    }
 }

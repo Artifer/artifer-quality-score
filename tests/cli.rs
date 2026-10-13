@@ -264,6 +264,18 @@ fn delta_tolerates_a_drop_within_max_drop() {
         "10",
     ]);
     assert_eq!(run.code, EXIT_OK);
+    assert!(!run.stdout.contains("Regression"), "{}", run.stdout);
+}
+
+#[test]
+fn delta_does_not_call_an_unchanged_score_a_regression() {
+    let tree = Tree::new("delta-level", &[("app.py", CLEAN)]);
+    tree.git_init();
+    tree.write("app.py", &format!("{CLEAN}\nLIMIT = 3\n"));
+
+    let run = aqs(&["delta", "--path", tree.path().to_str().unwrap()]);
+    assert_outcome(&run, EXIT_OK, &["app.py"]);
+    assert!(!run.stdout.contains("Regression"), "{}", run.stdout);
 }
 
 #[test]
@@ -482,6 +494,23 @@ fn config_applies_to_a_bare_filename_target() {
     let scan = aqs_in(tree.path(), &["scan", "messy.py", "--json", "--no-cache"]);
     assert_eq!(scan.json()["files"][0]["path"], "messy.py");
     assert_eq!(scan.json()["profile"], "quiet");
+}
+
+#[test]
+fn a_file_in_a_subdirectory_hangs_off_that_directory() {
+    let tree = Tree::new(
+        "config-nested",
+        &[
+            ("sub/.aqs.json", r#"{"name":"nested"}"#),
+            ("sub/messy.py", MESSY),
+        ],
+    );
+    let scan = aqs_in(
+        tree.path(),
+        &["scan", "sub/messy.py", "--json", "--no-cache"],
+    );
+    assert_eq!(scan.json()["files"][0]["path"], "messy.py");
+    assert_eq!(scan.json()["profile"], "nested");
 }
 
 #[test]

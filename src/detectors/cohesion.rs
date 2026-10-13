@@ -257,8 +257,9 @@ fn lcom4(
     let mut components = Components::new(connecting.iter().map(|f| f.name.clone()));
 
     for (index, f) in connecting.iter().enumerate() {
-        // Shared instance state connects two methods.
-        for other in connecting.iter().skip(index + 1) {
+        // Shared instance state connects two methods. The slice starts at the method
+        // itself, which joins it to its own component and so changes nothing.
+        for other in &connecting[index..] {
             if !fields[f.name.as_str()].is_disjoint(&fields[other.name.as_str()]) {
                 components.union(&f.name, &other.name);
             }

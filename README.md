@@ -726,8 +726,8 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ```bash
 make setup                    # once per clone: the coverage tool, and git's hooks in .githooks
 make check-fast               # lock file, rustfmt, clippy, and this repo's own score (must be 10)
-make check                    # the above, plus the 327 tests at 100% coverage
-cargo test --test 'cli*'      # the 95 that drive the real binary
+make check                    # the above, plus the 395 tests at 100% coverage
+cargo test --test 'cli*'      # the 106 that drive the real binary
 ```
 
 The checks are defined once, in the `Makefile`, and everything else calls it:
@@ -747,7 +747,22 @@ real binary that the CLI suites start are counted. A line no test executes is li
 file and number; the way out is a test, or deleting the line if nothing can reach it.
 Stable Rust has no way to exempt a line, and that is deliberate here.
 
-Three kinds of suite, and the split is deliberate. The CLI one is spread over five files
+Coverage says a line ran, not that a test would notice it being wrong. For that there is
+[`cargo-mutants`](https://mutants.rs), which changes the source one operator or return
+value at a time and runs the suite against each change:
+
+```bash
+cargo install cargo-mutants --locked
+cargo mutants                 # about 1,350 mutants; an hour on eight cores, split with --shard
+cargo mutants -f src/glob.rs  # one file, in a few minutes
+```
+
+None survives. It is too slow for `make check`, so it is run by hand after a change to
+the measuring code. A mutant no test can tell from the original is either written out of
+the code or listed in `.cargo/mutants.toml` with the reason; there is one. The dozen that
+time out are loops that no longer end, which is its own way of being caught.
+
+Three kinds of suite, and the split is deliberate. The CLI one is spread over six files
 by subject, sharing `tests/common`; the behavioural ones share `tests/support`:
 
 | suite | covers |
@@ -755,10 +770,13 @@ by subject, sharing `tests/common`; the behavioural ones share `tests/support`:
 | unit tests in `src/` | measurement primitives, glob and difflib parity, config validation |
 | `tests/behaviour.rs` | one test per rule — that it fires, and that it stays quiet on correct code |
 | `tests/behaviour_languages.rs` | the same rules read through Rust, Go, Ruby, Java and PHP |
+| `tests/boundaries.rs` | each limit met exactly and passed by one, on a profile that sets it to the sample's own measure |
+| `tests/boundaries_classes.rs` | which methods count towards a class's cohesion, and which classes are let off |
 | `tests/cli.rs` | the binary itself: exit codes, JSON shape, git-backed `delta` and `gate` |
 | `tests/cli_directives.rs` | `@aqs` directives through the binary: what they suppress, how a bad one fails |
 | `tests/cli_duplication.rs` | cross-file observations, `Duplicated Block`, and what the gate says a branch introduced |
 | `tests/cli_discovery.rs` | what a scan picks up: worktrees, single-file components, each language |
+| `tests/cli_edges.rs` | the flags and wordings one step from the usual path: `--no-cache`, `--no-merge-base`, widths, what a clean run leaves out |
 | `tests/cli_reports.rs` | what the reports say to a person: caveats, observations, `explain` listings, how `delta` and `gate` word a change |
 
 The CLI suite exists because the CLI *is* the contract — exit codes gate automation and

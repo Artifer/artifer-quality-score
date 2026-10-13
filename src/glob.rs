@@ -18,9 +18,12 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 /// past the closing bracket. An unterminated `[` is a literal, as in `fnmatch`.
 fn translate_class(chars: &[char], open_at: usize) -> (String, usize) {
     let mut close = open_at;
-    let leads_class = chars.get(close).is_some_and(|c| *c == '!' || *c == ']');
-    if leads_class {
-        close += 1;
+    // A leading `!` negates, and a `]` straight after the opening (or the `!`) is a
+    // member of the class rather than its end.
+    for lead in ['!', ']'] {
+        if chars.get(close) == Some(&lead) {
+            close += 1;
+        }
     }
     while close < chars.len() && chars[close] != ']' {
         close += 1;
@@ -104,6 +107,10 @@ mod tests {
         assert!(!fnmatch("a1.py", "a[!0-9].py"));
         // A leading `]` is a member of the class, not its end.
         assert!(fnmatch("a].py", "a[]x].py"));
+        // Negated, it still is.
+        assert!(fnmatch("a", "[!]x]"));
+        assert!(!fnmatch("]", "[!]x]"));
+        assert!(!fnmatch("x", "[!]x]"));
         // An unterminated `[` is a literal bracket.
         assert!(fnmatch("a[b", "a[b"));
         assert!(!fnmatch("ab", "a[b"));

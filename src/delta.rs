@@ -261,3 +261,90 @@ pub fn compute_delta(request: DeltaRequest, _cache: &mut dyn Cache) -> Result<De
         files: deltas,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::Range;
+
+    fn finding(category: &str, function: Option<&str>, penalty: f64) -> Finding {
+        Finding {
+            category: category.to_string(),
+            details: String::new(),
+            highlight_range: Range::line(1),
+            penalty,
+            value: None,
+            threshold: None,
+            function: function.map(str::to_string),
+        }
+    }
+
+    fn report(findings: Vec<Finding>) -> FileReport {
+        let mut report = FileReport::unsupported("a.py".into(), "python".into(), String::new());
+        report.file_level_code_smells = findings;
+        report
+    }
+
+    fn names(findings: &[Finding]) -> Vec<(&str, Option<&str>)> {
+        findings
+            .iter()
+            .map(|f| (f.category.as_str(), f.function.as_deref()))
+            .collect()
+    }
+
+    #[test]
+    fn a_finding_is_matched_on_both_its_rule_and_its_function() {
+        // Same rule in another function, and another rule in the same function: neither
+        // is the old finding come back, so one is fixed and two are introduced.
+        let old = report(vec![finding("Large Method", Some("load"), 1.0)]);
+        let new = report(vec![
+            finding("Large Method", Some("save"), 1.0),
+            finding("Complex Method", Some("load"), 1.0),
+        ]);
+        let (introduced, fixed, degraded, improved) = compare_reports(Some(&old), Some(&new));
+        assert_eq!(
+            names(&introduced),
+            [
+                ("Complex Method", Some("load")),
+                ("Large Method", Some("save"))
+            ]
+        );
+        assert_eq!(names(&fixed), [("Large Method", Some("load"))]);
+        assert!(degraded.is_empty() && improved.is_empty());
+    }
+
+    #[test]
+    fn a_file_level_finding_is_not_a_function_called_nothing() {
+        let old = report(vec![finding("Large Method", None, 1.0)]);
+        let new = report(vec![finding("Large Method", Some(""), 1.0)]);
+        let (introduced, fixed, _, _) = compare_reports(Some(&old), Some(&new));
+        assert_eq!(names(&introduced), [("Large Method", Some(""))]);
+        assert_eq!(names(&fixed), [("Large Method", None)]);
+    }
+
+    #[test]
+    fn the_worst_regression_comes_first_and_ties_go_by_path() {
+        let delta = |path: &str, score_change: f64| FileDelta {
+            path: path.to_string(),
+            old_score: None,
+            new_score: None,
+            score_change,
+            introduced: Vec::new(),
+            fixed: Vec::new(),
+            degraded: Vec::new(),
+            improved: Vec::new(),
+        };
+        let mut deltas = [delta("b.py", 0.5), delta("c.py", -1.0), delta("a.py", 0.5)];
+        worst_first(&mut deltas);
+        let order: Vec<&str> = deltas.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(order, ["c.py", "a.py", "b.py"]);
+    }
+
+    #[test]
+    fn a_finding_that_costs_the_same_as_before_is_not_reported() {
+        let same = report(vec![finding("Large Method", Some("load"), 1.0)]);
+        let (introduced, fixed, degraded, improved) = compare_reports(Some(&same), Some(&same));
+        assert!(introduced.is_empty() && fixed.is_empty());
+        assert!(degraded.is_empty() && improved.is_empty());
+    }
+}

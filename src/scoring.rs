@@ -161,3 +161,41 @@ pub fn score_file(ctx: &FileContext, raw: Vec<RawFinding>) -> FileReport {
         fingerprints: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A finding at `line:column`, of rule `category`, filed under `function`.
+    fn finding(at: (usize, usize), category: &str, function: Option<&str>) -> Finding {
+        Finding {
+            category: category.to_string(),
+            details: String::new(),
+            highlight_range: Range {
+                start_line: at.0,
+                start_column: at.1,
+                end_line: at.0,
+                end_column: at.1,
+            },
+            penalty: 0.0,
+            value: None,
+            threshold: None,
+            function: function.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn findings_run_down_the_file_then_by_rule_then_by_function() {
+        let expected = vec![
+            finding((1, 9), "B", None),
+            finding((2, 1), "B", Some("z")),
+            finding((2, 3), "A", Some("a")),
+            finding((2, 3), "A", Some("b")),
+            finding((2, 3), "B", None),
+        ];
+        let mut shuffled: Vec<Finding> = expected.iter().rev().cloned().collect();
+        shuffled.swap(0, 2);
+        sort_findings(&mut shuffled);
+        assert_eq!(shuffled, expected);
+    }
+}

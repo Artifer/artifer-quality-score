@@ -120,8 +120,9 @@ impl<'a> SequenceMatcher<'a> {
         let Match {
             mut a_start,
             mut b_start,
-            mut size,
+            size,
         } = found;
+        let (mut a_end, mut b_end) = (a_start + size, b_start + size);
         // Inline rather than behind `matches_before`/`matches_after` helpers: for a
         // two-line loop, seeing the bounds check and the equality together says more
         // than a predicate name does.
@@ -131,18 +132,15 @@ impl<'a> SequenceMatcher<'a> {
         {
             a_start -= 1;
             b_start -= 1;
-            size += 1;
         }
-        while a_start + size < window.a.end
-            && b_start + size < window.b.end
-            && self.a[a_start + size] == self.b[b_start + size]
-        {
-            size += 1;
+        while a_end < window.a.end && b_end < window.b.end && self.a[a_end] == self.b[b_end] {
+            a_end += 1;
+            b_end += 1;
         }
         Match {
             a_start,
             b_start,
-            size,
+            size: a_end - a_start,
         }
     }
 
@@ -160,18 +158,16 @@ impl<'a> SequenceMatcher<'a> {
             }
             total += found.size;
             let (a_end, b_end) = (found.a_start + found.size, found.b_start + found.size);
-            if window.a.start < found.a_start && window.b.start < found.b_start {
-                queue.push(Window {
-                    a: window.a.start..found.a_start,
-                    b: window.b.start..found.b_start,
-                });
-            }
-            if a_end < window.a.end && b_end < window.b.end {
-                queue.push(Window {
-                    a: a_end..window.a.end,
-                    b: b_end..window.b.end,
-                });
-            }
+            // What lies before the match and what lies after it. Either may be empty on
+            // one side, and an empty window simply matches nothing.
+            queue.push(Window {
+                a: window.a.start..found.a_start,
+                b: window.b.start..found.b_start,
+            });
+            queue.push(Window {
+                a: a_end..window.a.end,
+                b: b_end..window.b.end,
+            });
         }
         total
     }
@@ -206,21 +202,41 @@ mod tests {
     /// sides. Without that growth two near-identical long functions would score low.
     #[test]
     fn a_long_sequence_matches_across_its_popular_elements() {
-        let mut a: Vec<String> = Vec::new();
-        for index in 0..60 {
-            a.extend([
+        let a = statements(60);
+        let mut b = a.clone();
+        b[121] = "renamed".to_string();
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        let b: Vec<&str> = b.iter().map(String::as_str).collect();
+        // All but the renamed element match: 239 of 240, on both sides.
+        let similarity = ratio(&a, &b);
+        assert!((similarity - 478.0 / 480.0).abs() < 1e-9, "{similarity}");
+    }
+
+    #[test]
+    fn growing_a_match_forwards_steps_through_both_sequences() {
+        // `a` repeats a popular `)` where `b` has something else. Growth must stop there
+        // rather than hold `b` still and match its `)` a second time.
+        let (mut a, mut b) = (statements(60), statements(60));
+        a[123] = ")".to_string();
+        b[123] = "renamed".to_string();
+        let a: Vec<&str> = a.iter().map(String::as_str).collect();
+        let b: Vec<&str> = b.iter().map(String::as_str).collect();
+        let similarity = ratio(&a, &b);
+        assert!((similarity - 478.0 / 480.0).abs() < 1e-9, "{similarity}");
+    }
+
+    /// `( name0 ) ; ( name1 ) ; ...` -- three popular elements around each rare one.
+    fn statements(count: usize) -> Vec<String> {
+        let mut tokens: Vec<String> = Vec::new();
+        for index in 0..count {
+            tokens.extend([
                 "(".to_string(),
                 format!("name{index}"),
                 ")".to_string(),
                 ";".to_string(),
             ]);
         }
-        let mut b = a.clone();
-        b[121] = "renamed".to_string();
-        let a: Vec<&str> = a.iter().map(String::as_str).collect();
-        let b: Vec<&str> = b.iter().map(String::as_str).collect();
-        let similarity = ratio(&a, &b);
-        assert!(similarity > 0.99 && similarity < 1.0, "{similarity}");
+        tokens
     }
 
     #[test]
@@ -228,6 +244,23 @@ mod tests {
         // After `a b` is matched, `x` is looked for only before it in `b` — where it is not.
         let similarity = ratio(&["x", "a", "b"], &["a", "b", "x"]);
         assert!((similarity - 2.0 / 3.0).abs() < 1e-9, "{similarity}");
+    }
+
+    #[test]
+    fn what_matches_on_either_side_of_the_longest_run_counts_too() {
+        // `x y z` is the longest run; `a` before it and `q` after it match as well.
+        let similarity = ratio(
+            &["a", "1", "x", "y", "z", "2", "q"],
+            &["a", "3", "x", "y", "z", "4", "q"],
+        );
+        assert!((similarity - 10.0 / 14.0).abs() < 1e-9, "{similarity}");
+    }
+
+    #[test]
+    fn of_equally_long_runs_the_earliest_is_matched_first() {
+        // Matching `x` first leaves `z` to be found after it; matching `y` leaves nothing.
+        let similarity = ratio(&["x", "z", "y"], &["y", "x", "q", "z"]);
+        assert!((similarity - 4.0 / 7.0).abs() < 1e-9, "{similarity}");
     }
 
     #[test]
