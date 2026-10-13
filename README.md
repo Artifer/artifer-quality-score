@@ -727,7 +727,7 @@ unanchored regex in the glob translation (`test_*.py` matched `x_test_a.py`), an
 ```bash
 make setup                    # once per clone: the coverage tool, and git's hooks in .githooks
 make check-fast               # lock file, rustfmt, clippy, and this repo's own score (must be 10)
-make check                    # the above, plus the 396 tests at 100% coverage
+make check                    # the above, plus the 397 tests at 100% coverage
 cargo test --test 'cli*'      # the 106 that drive the real binary
 ```
 

@@ -8,7 +8,7 @@ mod support;
 
 use aqs::models::{FileReport, Finding};
 use aqs::profile::{self as prof, Profile};
-use support::{detail, score, score_with};
+use support::{detail, py, score, score_with};
 
 fn profile_with(overrides: &[(&str, f64)]) -> Profile {
     let mut profile = Profile::default();
@@ -321,6 +321,21 @@ fn the_multiplier_also_stretches_a_limit_no_test_file_is_exempt_from() {
     assert_eq!(told(&in_a_test, prof::LARGE_METHOD), []);
     let shipped = score_with(&profile_with(&limits), ENGINE, "engine.py", "python");
     assert_eq!(on_decide(&shipped, prof::LARGE_METHOD).len(), 1);
+}
+
+#[test]
+fn a_bare_star_or_slash_in_a_signature_is_not_an_argument() {
+    // Four parameters and two markers for how they may be passed.
+    let report = py("def place(a, /, b, *, c, d):\n    return a\n");
+    assert_eq!(told(&report, prof::EXCESS_ARGUMENTS), []);
+
+    let report = py("def place(a, /, b, *, c, d, e):\n    return a\n");
+    let said: Vec<String> = told(&report, prof::EXCESS_ARGUMENTS)
+        .into_iter()
+        .map(|(details, _)| details)
+        .collect();
+    assert_eq!(said.len(), 1);
+    assert!(said[0].contains('5'), "{said:?}");
 }
 
 /// Two functions called `run`, each of complexity 3, with `marker` on the line above the second.

@@ -10,6 +10,10 @@ use tree_sitter::Node;
 #[allow(unused_imports)]
 use super::*;
 
+/// Python's bare `*` and `/` in a signature. They say how the parameters around them
+/// may be passed and are nothing a caller passes, so they are not parameters.
+const SEPARATOR_NODES: &[&str] = &["keyword_separator", "positional_separator"];
+
 /// The node holding a callable's parameters.
 ///
 /// By position for most languages, but by field where position is ambiguous: a Go
@@ -49,7 +53,7 @@ pub fn parameters<'tree>(
 
     let mut params = Vec::new();
     for param in named_children(&container) {
-        if is_comment(&param) {
+        if is_comment(&param) || SEPARATOR_NODES.contains(&param.kind()) {
             continue;
         }
         // Rust models `&self` as its own node kind rather than a parameter whose text

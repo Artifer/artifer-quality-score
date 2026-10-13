@@ -1,6 +1,6 @@
 [package]
 name = "aqs"
-version = "0.8.0"
+version = "0.8.1"
 edition = "2021"
 rust-version = "1.80"
 description = "Deterministic, explainable code quality scoring for Python, TypeScript, JavaScript, Rust, Go, Ruby, Java, PHP, Vue and Svelte"
